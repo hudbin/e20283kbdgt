@@ -35,12 +35,13 @@ export async function POST(req: Request) {
       }, { onConflict: 'telegram_id' })
 
       if (text === '/start') {
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://e20283kbdgt.vercel.app'
         await sendMessage(
           chat.id, 
           `Salom, ${from.first_name}! 👋\nMen sizning shaxsiy budjet yordamchiningizman.\nXarajat va daromadlaringizni yozib yuboring yoki ovozli xabar qoldiring. Mini App orqali ham ishlashingiz mumkin.`,
           {
             inline_keyboard: [
-              [{ text: "Mini App'ni ochish 🚀", web_app: { url: 'https://sizning-domen.uz' } }] // Todo: URL ni to'g'irlash
+              [{ text: "Mini App'ni ochish 🚀", web_app: { url: appUrl } }]
             ]
           }
         )
