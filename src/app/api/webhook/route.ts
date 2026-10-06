@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { geminiFlashModel } from '@/lib/gemini'
+import { generateContentWithFallback } from '@/lib/gemini'
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`
 
@@ -63,8 +63,7 @@ Sening javobing faqat quyidagi JSON formatida bo'lsin:
 Agar xabar moliyaviy amaliyot bo'lmasa, shunchaki null qaytar. Hech qanday qo'shimcha matn yozma. JSON dan boshqa narsa qaytarilmasligi kerak.
 `
         try {
-          const result = await geminiFlashModel.generateContent(prompt)
-          const responseText = result.response.text()
+          const responseText = await generateContentWithFallback(prompt)
           
           let parsedData = null
           // JSON ni extract qilish (agar markdown backticks ichida bo'lsa)
