@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { analyzeTextMessage, analyzeAudioMessage } from '@/lib/gemini'
+import { analyzeTextMessage, analyzeAudioMessage, answerFinancialQuery } from '@/lib/gemini'
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`
 
@@ -47,7 +47,10 @@ export async function POST(req: Request) {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://e20283kbdgt.vercel.app'
         await sendMessage(
           chat.id, 
-          `Salom, ${from.first_name}! 👋\nMen sizning shaxsiy budjet yordamchiningizman.\nXarajat va daromadlaringizni yozib yuboring yoki ovozli xabar qoldiring. Mini App orqali ham ishlashingiz mumkin.`,
+          `Salom, ${from.first_name}! 👋\nMen sizning shaxsiy budjet yordamchiningizman.\n\n` +
+          `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i>, <i>"taksiga 15 ming ketdi"</i> yoki ovozli xabar yuboring.\n` +
+          `🔹 <b>Tahliliy savollar:</b> <i>"Oxirgi oyda ichimliklar uchun qancha sarfladim?"</i>, <i>"Menda qancha balans qoldi?"</i> deb bemalol so'rang.\n` +
+          `🔹 <b>Mini App:</b> To'liq grafiklar va hisobotlar uchun pastdagi tugmani bosing.`,
           {
             inline_keyboard: [
               [{ text: "Mini App'ni ochish 🚀", web_app: { url: appUrl } }]
@@ -58,6 +61,7 @@ export async function POST(req: Request) {
       }
 
       let parsedData: any = null
+      let originalPromptText = text || ""
 
       if (text) {
         await sendTypingAction(chat.id, 'typing')
@@ -72,7 +76,6 @@ export async function POST(req: Request) {
       } else if (voice) {
         await sendTypingAction(chat.id, 'typing')
         try {
-          // Telegramdan ovozli fayl ma'lumotini olish
           const fileRes = await fetch(`${TELEGRAM_API_URL}/getFile?file_id=${voice.file_id}`)
           const fileData = await fileRes.json()
 
@@ -84,6 +87,7 @@ export async function POST(req: Request) {
 
             const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg')
             parsedData = JSON.parse(responseText)
+            originalPromptText = parsedData?.description || "Ovozli savol"
           } else {
             await sendMessage(chat.id, "Ovozli faylni yuklab olishda muammo yuz berdi.")
             return NextResponse.json({ ok: true })
@@ -95,7 +99,33 @@ export async function POST(req: Request) {
         }
       }
 
-      if (parsedData && parsedData.type && parsedData.amount) {
+      // 1. Agar foydalanuvchi SAVOL yoki TAHLIL so'ragan bo'lsa (QUERY):
+      if (parsedData?.action === 'QUERY') {
+        await sendTypingAction(chat.id, 'typing')
+
+        // Supabase bazasidan oxirgi amaliyotlarni olib kelamiz
+        const { data: userTransactions } = await supabase
+          .from('transactions')
+          .select('amount, type, description, date, categories(name)')
+          .eq('telegram_id', from.id)
+          .order('date', { ascending: false })
+          .limit(100)
+
+        const simplifiedData = (userTransactions || []).map((t: any) => ({
+          amount: t.amount,
+          type: t.type,
+          category: t.categories?.name || 'Nomaʼlum',
+          description: t.description,
+          date: t.date
+        }))
+
+        const aiAnswer = await answerFinancialQuery(originalPromptText, simplifiedData)
+        await sendMessage(chat.id, aiAnswer)
+        return NextResponse.json({ ok: true })
+      }
+
+      // 2. Agar yangi TRANZAKSIYA bo'lsa:
+      if (parsedData?.type && parsedData?.amount) {
         const typeLabel = parsedData.type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'
         const categoryLabel = parsedData.category || (parsedData.type === 'EXPENSE' ? 'Xarajat' : 'Daromad')
         const amountNum = Number(parsedData.amount)
@@ -112,7 +142,7 @@ export async function POST(req: Request) {
           ]
         })
       } else if (text || voice) {
-        await sendMessage(chat.id, "Kechirasiz, xabaringizdan moliyaviy ma'lumot (summa va tur) ajratib ololmadim.")
+        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i> yoki savol uchun: <i>\"Oxirgi oyda qancha sarfladim?\"</i> deb yozing.")
       }
 
     } else if (body.callback_query) {
