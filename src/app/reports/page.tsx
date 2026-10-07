@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileSpreadsheet, FileText, Send } from "lucide-react";
 import Link from "next/link";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -12,6 +12,8 @@ export default function ReportsPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<"all" | "month" | "year">("month");
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [sendingType, setSendingType] = useState<"pdf" | "excel" | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.Telegram?.WebApp?.initDataUnsafe?.user) {
@@ -51,11 +53,50 @@ export default function ReportsPage() {
     return true;
   });
 
-  const exportPDF = () => {
+  const sendFileToBot = async (blob: Blob, filename: string, type: "pdf" | "excel") => {
+    const telegramId = user?.id || 123456789;
+    try {
+      setSendingType(type);
+      setStatusMessage("Fayl bot chatiga yuborilmoqda...");
+
+      const formData = new FormData();
+      formData.append("telegram_id", String(telegramId));
+      formData.append("file", blob, filename);
+      formData.append(
+        "caption",
+        `📊 <b>${period === "month" ? "Oylik" : period === "year" ? "Yillik" : "Umumiy"} hisobot</b>\nJami amaliyotlar soni: ${filteredTransactions.length} ta`
+      );
+
+      const res = await fetch("/api/reports/send", {
+        method: "POST",
+        body: formData
+      });
+
+      const resData = await res.json();
+      if (res.ok) {
+        setStatusMessage("✅ Hisobot bot chatiga muvaffaqiyatli yuborildi! Telegramni ochib ko'rishingiz mumkin.");
+        if (typeof window !== "undefined" && window.Telegram?.WebApp) {
+          (window.Telegram.WebApp as any)?.HapticFeedback?.notificationOccurred?.("success");
+        }
+      } else {
+        setStatusMessage(`❌ Yuborishda xatolik: ${resData.error || "Noma'lum xatolik"}`);
+      }
+    } catch (err: any) {
+      setStatusMessage(`❌ Xatolik yuz berdi: ${err.message}`);
+    } finally {
+      setSendingType(null);
+    }
+  };
+
+  const handleSendPDF = () => {
     const doc = new jsPDF();
     doc.text("Shaxsiy Budjet Hisoboti", 14, 15);
     doc.setFontSize(10);
-    doc.text(`Davr: ${period === "month" ? "Joriy oy" : period === "year" ? "Joriy yil" : "Barchasi"}`, 14, 22);
+    doc.text(
+      `Davr: ${period === "month" ? "Joriy oy" : period === "year" ? "Joriy yil" : "Barcha davr"}`,
+      14,
+      22
+    );
 
     const tableRows = filteredTransactions.map((t, idx) => [
       idx + 1,
@@ -72,10 +113,12 @@ export default function ReportsPage() {
       startY: 28,
     });
 
-    doc.save(`budget_report_${period}.pdf`);
+    const pdfBlob = doc.output("blob");
+    const filename = `hisobot_${period}_${Date.now()}.pdf`;
+    sendFileToBot(pdfBlob, filename, "pdf");
   };
 
-  const exportExcel = () => {
+  const handleSendExcel = () => {
     const dataToExport = filteredTransactions.map((t, idx) => ({
       "№": idx + 1,
       "Sana": new Date(t.date).toLocaleDateString("uz-UZ"),
@@ -88,7 +131,12 @@ export default function ReportsPage() {
     const worksheet = XLSX.utils.json_to_sheet(dataToExport);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Hisobot");
-    XLSX.writeFile(workbook, `budget_report_${period}.xlsx`);
+    const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+    const excelBlob = new Blob([excelBuffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
+    const filename = `hisobot_${period}_${Date.now()}.xlsx`;
+    sendFileToBot(excelBlob, filename, "excel");
   };
 
   return (
@@ -100,7 +148,8 @@ export default function ReportsPage() {
         <h1 className="text-xl font-bold text-gray-900">Hisobotlar</h1>
       </header>
 
-      <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100 mb-6">
+      {/* Davr tanlash */}
+      <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100 mb-4">
         <button
           onClick={() => setPeriod("month")}
           className={`flex-1 py-2 text-xs font-semibold rounded-xl transition ${
@@ -127,30 +176,50 @@ export default function ReportsPage() {
         </button>
       </div>
 
+      {/* Xabar/Status bildirishnomasi */}
+      {statusMessage && (
+        <div className="p-3 mb-4 rounded-xl text-xs bg-blue-50 text-blue-800 border border-blue-100 flex items-center gap-2">
+          <CheckCircle2 size={16} className="shrink-0" />
+          <span>{statusMessage}</span>
+        </div>
+      )}
+
+      {/* Bot Chatiga Yuborish Tugmalari */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <button
-          onClick={exportPDF}
-          disabled={filteredTransactions.length === 0}
-          className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center gap-2 hover:bg-gray-50 active:scale-95 transition"
+          onClick={handleSendPDF}
+          disabled={filteredTransactions.length === 0 || sendingType !== null}
+          className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center gap-2 hover:bg-gray-50 active:scale-95 transition disabled:opacity-50"
         >
           <div className="p-3 bg-red-50 text-red-600 rounded-xl">
             <FileText size={24} />
           </div>
-          <span className="font-semibold text-xs text-gray-800">PDF yuklab olish</span>
+          <span className="font-semibold text-xs text-gray-800">
+            {sendingType === "pdf" ? "Yuborilmoqda..." : "PDF botga yuborish"}
+          </span>
+          <span className="text-[10px] text-gray-400 flex items-center gap-1">
+            <Send size={10} /> Telegram chatga
+          </span>
         </button>
 
         <button
-          onClick={exportExcel}
-          disabled={filteredTransactions.length === 0}
-          className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center gap-2 hover:bg-gray-50 active:scale-95 transition"
+          onClick={handleSendExcel}
+          disabled={filteredTransactions.length === 0 || sendingType !== null}
+          className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center gap-2 hover:bg-gray-50 active:scale-95 transition disabled:opacity-50"
         >
           <div className="p-3 bg-green-50 text-green-600 rounded-xl">
             <FileSpreadsheet size={24} />
           </div>
-          <span className="font-semibold text-xs text-gray-800">Excel (XLSX) olish</span>
+          <span className="font-semibold text-xs text-gray-800">
+            {sendingType === "excel" ? "Yuborilmoqda..." : "Excel botga yuborish"}
+          </span>
+          <span className="text-[10px] text-gray-400 flex items-center gap-1">
+            <Send size={10} /> Telegram chatga
+          </span>
         </button>
       </div>
 
+      {/* Davrdagi amaliyotlar ro'yxati */}
       <div className="flex-1">
         <h3 className="font-bold text-sm text-gray-700 mb-3">
           Tanlangan davrdagi amaliyotlar ({filteredTransactions.length} ta)
