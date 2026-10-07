@@ -40,7 +40,12 @@ async function getLiveActiveModels(): Promise<string[]> {
     console.warn('[AI] Jonli modellarni tekshirishda xatolik:', err?.message)
   }
 
-  return ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']
+  return [
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.8-flash'
+  ]
 }
 
 async function generateWithSafety(
@@ -51,9 +56,19 @@ async function generateWithSafety(
   const activeModels = await getLiveActiveModels()
   let lastError: any = null
 
+  // Prioritize active fast/stable models (3.5-flash, 3.5-flash-lite, 3.1-flash-lite, 3.8-flash)
+  const priorityList = [
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-3.8-flash'
+  ]
+
   const sortedModels = [
-    ...activeModels.filter((m) => m.includes('3.8')),
-    ...activeModels.filter((m) => !m.includes('3.8'))
+    ...priorityList.filter((m) => activeModels.includes(m)),
+    ...activeModels.filter((m) => !priorityList.includes(m))
   ]
 
   for (const modelName of sortedModels) {
