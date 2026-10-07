@@ -5,7 +5,6 @@ export const genAI = new GoogleGenerativeAI(apiKey)
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// API'dan jonli olingan faol modellar keshi (faqat ayni paytda Google tomonidan qo'llab-quvvatlanayotganlar)
 let liveActiveModels: string[] = []
 let lastFetchedTime = 0
 
@@ -20,12 +19,10 @@ async function getLiveActiveModels(): Promise<string[]> {
     if (res.ok) {
       const data = await res.json()
       if (data.models && Array.isArray(data.models)) {
-        // Faqat generateContent ishlaydigan va eskirib o'chirilmagan modellar
         const valid = data.models
           .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
           .map((m: any) => m.name.replace('models/', ''))
 
-        // Eng yangi va flash modellarni boshiga saralaymiz
         valid.sort((a: string, b: string) => {
           const aFlash = a.includes('flash') ? -1 : 1
           const bFlash = b.includes('flash') ? -1 : 1
@@ -35,7 +32,6 @@ async function getLiveActiveModels(): Promise<string[]> {
         if (valid.length > 0) {
           liveActiveModels = valid
           lastFetchedTime = now
-          console.log('[AI] Ayni vaqtda faol va qo\'llab-quvvatlanayotgan modellar:', liveActiveModels)
           return liveActiveModels
         }
       }
@@ -47,13 +43,6 @@ async function getLiveActiveModels(): Promise<string[]> {
   return ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']
 }
 
-/**
- * Universal xavfsiz generatsiya:
- * 1. Google API'dan AYNAN HOZIR FAOL bo'lgan modellar ro'yxatini oladi.
- * 2. Avval gemini-3.8-flash ga urinadi.
- * 3. Agar 503/429 bo'lsa, 1.5s kutib qayta urinadi.
- * 4. Agar eskirgan bo'lsa (404/deprecated) yoki server band bo'lsa, ro'yxatdagi boshqa JONLI modelga o'tadi.
- */
 async function generateWithSafety(
   promptOrParts: any,
   jsonMode: boolean = true,
@@ -62,7 +51,6 @@ async function generateWithSafety(
   const activeModels = await getLiveActiveModels()
   let lastError: any = null
 
-  // gemini-3.8-flash ro'yxat boshida bo'lishini ta'minlaymiz (agar mavjud bo'lsa)
   const sortedModels = [
     ...activeModels.filter((m) => m.includes('3.8')),
     ...activeModels.filter((m) => !m.includes('3.8'))
@@ -92,19 +80,15 @@ async function generateWithSafety(
             err?.message?.includes('Overloaded') ||
             err?.message?.includes('Resource has been exhausted')
 
-          console.warn(`[AI] ${modelName} (urinish ${attempt}) xato: ${err?.message}`)
-
           if (isOverloaded && attempt < maxRetries) {
-            console.log(`[AI] 503/429 aniqlandi. 1.5s kutib qayta urinilmoqda...`)
             await sleep(1500)
             continue
           }
-          break // Keyingi faol modelga o'tish
+          break
         }
       }
     } catch (err: any) {
       lastError = err
-      console.warn(`[AI] ${modelName} ishga tushmadi: ${err?.message}`)
     }
   }
 
@@ -112,41 +96,45 @@ async function generateWithSafety(
 }
 
 /**
- * Matnli xabarni niyatini aniqlash
+ * Matnli xabarni niyatini aniqlash:
+ * - TRANSACTION (kiritish)
+ * - REPORT (fayl sifatida hisobot so'rash)
+ * - QUERY (savol/tahlil so'rash)
+ * - OTHER
  */
 export async function analyzeTextMessage(text: string) {
   const prompt = `
 Sen aqlli shaxsiy moliyaviy yordamchi AIsan. Foydalanuvchi quyidagi xabarni yozdi: "${text}"
 
-Vazifang:
-1. Agar bu yangi tranzaksiya (xarajat yoki daromad kiritish, masalan: "2 ta flesh oldim 30 ming", "taksiga 15000 ketdi", "oylik tushdi 3 mln") bo'lsa:
+Vazifang xabarni 4 turdan biriga ajratish:
+1. REPORT: Foydalanuvchi hisobotni fayl (PDF/Excel) sifatida so'ragan bo'lsa (masalan: "O'tgan oy hisobotini ber pdf va excel fayllarni", "bu oylik hisobotni excelda tashla", "menga hisobot faylini yubor", "pdf hisobot ber").
+   Bunda:
+   action: "REPORT"
+   report_period: "month" | "last_month" | "year" | "all"
+   report_formats: ("pdf" | "excel") ro'yxati (masalan: ["pdf", "excel"] yoki faqat ["pdf"])
+
+2. TRANSACTION: Yangi xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "taksiga 15000 ketdi", "oylik tushdi 3 mln").
    action: "TRANSACTION"
    type: "EXPENSE" yoki "INCOME"
-   amount: son (masalan: 30000)
-   category: Kategoriya nomi (masalan: Ichimliklar, Oziq-ovqat, Transport, Maosh, Xaridlar va h.k.)
+   amount: son
+   category: Kategoriya nomi
    description: qisqa izoh
 
-2. Agar bu o'zining budjeti, xarajatlari yoki daromadlari haqida SAVOL yoki TAHLIL (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kecha qancha xarajat qildim?", "Eng ko'p nimaga pul ketdi?", "Menda qancha pul qoldi?") bo'lsa:
+3. QUERY: O'z budjeti haqida oddiy savol/tahlil so'ragan bo'lsa (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kecha qancha xarajat qildim?").
    action: "QUERY"
-   type: null
-   amount: null
-   category: null
-   description: null
 
-3. Boshqa hollarda:
+4. OTHER: Boshqa har qanday suhbat.
    action: "OTHER"
-   type: null
-   amount: null
-   category: null
-   description: null
 
 Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 {
-  "action": "TRANSACTION" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
-  "description": string | null
+  "description": string | null,
+  "report_period": "month" | "last_month" | "year" | "all" | null,
+  "report_formats": ["pdf", "excel"] | null
 }
 `
   return generateWithSafety(prompt, true)
@@ -160,15 +148,18 @@ export async function analyzeAudioMessage(audioBase64: string, mimeType: string 
 Foydalanuvchi ovozli xabar yubordi.
 Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
 1. Agar yangi kirim yoki chiqim bo'lsa -> action: "TRANSACTION"
-2. Agar o'z xarajatlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
-3. Boshqa bo'lsa -> action: "OTHER"
+2. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
+3. Agar o'z xarajatlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
+4. Boshqa bo'lsa -> action: "OTHER"
 
 {
-  "action": "TRANSACTION" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
-  "description": string | null
+  "description": string | null,
+  "report_period": "month" | "last_month" | "year" | "all" | null,
+  "report_formats": ["pdf", "excel"] | null
 }
 `
   const parts = [
@@ -197,7 +188,7 @@ ${JSON.stringify(transactionsContext, null, 2)}
 
 Vazifang:
 1. Bazadagi ma'lumotlarni chuqur tahlil qil.
-2. Agar savol ma'lum bir toifaga (masalan, ichimliklar, taksi, oziq-ovqat) tegishli bo'lsa, mos yozuvlarni topib summalarini hisobla.
+2. Agar savol ma'lum bir toifaga tegishli bo'lsa, mos yozuvlarni topib summalarini hisobla.
 3. Foydalanuvchiga Telegram formatida (HTML teglari bilan: <b>bold</b>, <i>italic</i>) do'stona, aniq va lo'nda javob qaytar.
 4. Javob o'zbek tilida, professional va dalda beruvchi ohangda bo'lsin.
 `

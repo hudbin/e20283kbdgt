@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { analyzeTextMessage, analyzeAudioMessage, answerFinancialQuery } from '@/lib/gemini'
+import { generatePdfBuffer, generateExcelBuffer } from '@/lib/reports/generator'
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`
 
@@ -18,7 +19,23 @@ async function sendMessage(chatId: number, text: string, replyMarkup?: any) {
   return res.json()
 }
 
-async function sendTypingAction(chatId: number, action: 'typing' | 'record_voice' = 'typing') {
+async function sendDocumentBuffer(chatId: number, buffer: Buffer, filename: string, caption?: string) {
+  const blob = new Blob([new Uint8Array(buffer)])
+  const formData = new FormData()
+  formData.append('chat_id', String(chatId))
+  formData.append('document', blob, filename)
+  if (caption) {
+    formData.append('caption', caption)
+  }
+
+  const res = await fetch(`${TELEGRAM_API_URL}/sendDocument`, {
+    method: 'POST',
+    body: formData
+  })
+  return res.json()
+}
+
+async function sendTypingAction(chatId: number, action: 'typing' | 'upload_document' = 'typing') {
   try {
     await fetch(`${TELEGRAM_API_URL}/sendChatAction`, {
       method: 'POST',
@@ -35,7 +52,6 @@ export async function POST(req: Request) {
     if (body.message) {
       const { chat, text, from, voice } = body.message
 
-      // Foydalanuvchini bazaga kiritish / yangilash
       await supabase.from('users').upsert({
         telegram_id: from.id,
         username: from.username,
@@ -48,9 +64,10 @@ export async function POST(req: Request) {
         await sendMessage(
           chat.id, 
           `Salom, ${from.first_name}! 👋\nMen sizning shaxsiy budjet yordamchiningizman.\n\n` +
-          `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i>, <i>"taksiga 15 ming ketdi"</i> yoki ovozli xabar yuboring.\n` +
-          `🔹 <b>Tahliliy savollar:</b> <i>"Oxirgi oyda ichimliklar uchun qancha sarfladim?"</i>, <i>"Menda qancha balans qoldi?"</i> deb bemalol so'rang.\n` +
-          `🔹 <b>Mini App:</b> To'liq grafiklar va hisobotlar uchun pastdagi tugmani bosing.`,
+          `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i> yoki ovozli xabar qoldiring.\n` +
+          `🔹 <b>Hisobot fayllarini so'rash:</b> <i>"O'tgan oy hisobotini ber pdf va excel fayllarda"</i> deb yozing yoki ayting.\n` +
+          `🔹 <b>Tahliliy savollar:</b> <i>"Ichimliklar uchun qancha sarfladim?"</i>, <i>"Menda qancha balans qoldi?"</i> deb so'rang.\n` +
+          `🔹 <b>Mini App:</b> To'liq grafiklar uchun pastdagi tugmani bosing.`,
           {
             inline_keyboard: [
               [{ text: "Mini App'ni ochish 🚀", web_app: { url: appUrl } }]
@@ -87,7 +104,7 @@ export async function POST(req: Request) {
 
             const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg')
             parsedData = JSON.parse(responseText)
-            originalPromptText = parsedData?.description || "Ovozli savol"
+            originalPromptText = parsedData?.description || "Ovozli xabar"
           } else {
             await sendMessage(chat.id, "Ovozli faylni yuklab olishda muammo yuz berdi.")
             return NextResponse.json({ ok: true })
@@ -99,11 +116,79 @@ export async function POST(req: Request) {
         }
       }
 
-      // 1. Agar foydalanuvchi SAVOL yoki TAHLIL so'ragan bo'lsa (QUERY):
+      // 1. Agar foydalanuvchi HISOBOT FAYLINI so'ragan bo'lsa (REPORT):
+      if (parsedData?.action === 'REPORT') {
+        await sendTypingAction(chat.id, 'upload_document')
+        await sendMessage(chat.id, "⏳ Hisobotingiz tayyorlanmoqda, hozir fayllarni yuboraman...")
+
+        // Supabase bazasidan ma'lumotlarni olamiz
+        const { data: allTransactions } = await supabase
+          .from('transactions')
+          .select('amount, type, description, date, categories(name)')
+          .eq('telegram_id', from.id)
+          .order('date', { ascending: false })
+
+        const now = new Date()
+        const period = parsedData.report_period || 'month'
+
+        const filtered = (allTransactions || []).filter((t: any) => {
+          const d = new Date(t.date)
+          if (period === 'all') return true
+          if (period === 'year') return d.getFullYear() === now.getFullYear()
+          if (period === 'last_month') {
+            const prevMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1
+            const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear()
+            return d.getMonth() === prevMonth && d.getFullYear() === prevYear
+          }
+          // Default: joriy oy
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+        })
+
+        if (filtered.length === 0) {
+          await sendMessage(chat.id, "Ushbu davr uchun hali hech qanday amaliyotlar mavjud emas.")
+          return NextResponse.json({ ok: true })
+        }
+
+        const periodTitle =
+          period === 'last_month'
+            ? "O'tgan oy"
+            : period === 'year'
+            ? "Joriy yil"
+            : period === 'all'
+            ? "Barcha davr"
+            : "Joriy oy"
+
+        const formats = parsedData.report_formats || ['pdf', 'excel']
+        const hasPdf = formats.includes('pdf')
+        const hasExcel = formats.includes('excel')
+
+        if (hasPdf) {
+          const pdfBuffer = generatePdfBuffer(filtered, periodTitle)
+          await sendDocumentBuffer(
+            chat.id,
+            pdfBuffer,
+            `hisobot_${period}_${Date.now()}.pdf`,
+            `📄 <b>${periodTitle} boʻyicha PDF hisobot</b>`
+          )
+        }
+
+        if (hasExcel) {
+          const excelBuffer = generateExcelBuffer(filtered)
+          await sendDocumentBuffer(
+            chat.id,
+            excelBuffer,
+            `hisobot_${period}_${Date.now()}.xlsx`,
+            `📊 <b>${periodTitle} boʻyicha Excel hisobot</b>`
+          )
+        }
+
+        return NextResponse.json({ ok: true })
+      }
+
+      // 2. Agar foydalanuvchi SAVOL yoki TAHLIL so'ragan bo'lsa (QUERY):
       if (parsedData?.action === 'QUERY') {
         await sendTypingAction(chat.id, 'typing')
 
-        // Supabase bazasidan oxirgi amaliyotlarni olib kelamiz
         const { data: userTransactions } = await supabase
           .from('transactions')
           .select('amount, type, description, date, categories(name)')
@@ -124,7 +209,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: true })
       }
 
-      // 2. Agar yangi TRANZAKSIYA bo'lsa:
+      // 3. Agar yangi TRANZAKSIYA bo'lsa:
       if (parsedData?.type && parsedData?.amount) {
         const typeLabel = parsedData.type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'
         const categoryLabel = parsedData.category || (parsedData.type === 'EXPENSE' ? 'Xarajat' : 'Daromad')
@@ -142,7 +227,7 @@ export async function POST(req: Request) {
           ]
         })
       } else if (text || voice) {
-        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i> yoki savol uchun: <i>\"Oxirgi oyda qancha sarfladim?\"</i> deb yozing.")
+        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i>, hisobot uchun: <i>\"O'tgan oy hisobotini ber pdf va excelda\"</i> deb yozing.")
       }
 
     } else if (body.callback_query) {
@@ -168,7 +253,6 @@ export async function POST(req: Request) {
         const amount = parseFloat(parts[2])
         const categoryName = decodeURIComponent(parts[3] || (type === 'EXPENSE' ? 'Xarajat' : 'Daromad'))
 
-        // Kategoriyani topish yoki yaratish
         let categoryId = null
         const { data: catData } = await supabase
            .from('categories')
