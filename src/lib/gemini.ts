@@ -3,30 +3,72 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 const apiKey = process.env.GEMINI_API_KEY || ''
 export const genAI = new GoogleGenerativeAI(apiKey)
 
-// Asosiy model siz tanlagan gemini-3.8-flash, agar u band (503/429) bo'lsa zaxiraga o'tadi
-export const MODEL_CASCADE = [
-  'gemini-3.8-flash',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash'
-]
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// API'dan jonli olingan faol modellar keshi (faqat ayni paytda Google tomonidan qo'llab-quvvatlanayotganlar)
+let liveActiveModels: string[] = []
+let lastFetchedTime = 0
+
+async function getLiveActiveModels(): Promise<string[]> {
+  const now = Date.now()
+  if (liveActiveModels.length > 0 && now - lastFetchedTime < 30 * 60 * 1000) {
+    return liveActiveModels
+  }
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.models && Array.isArray(data.models)) {
+        // Faqat generateContent ishlaydigan va eskirib o'chirilmagan modellar
+        const valid = data.models
+          .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+          .map((m: any) => m.name.replace('models/', ''))
+
+        // Eng yangi va flash modellarni boshiga saralaymiz
+        valid.sort((a: string, b: string) => {
+          const aFlash = a.includes('flash') ? -1 : 1
+          const bFlash = b.includes('flash') ? -1 : 1
+          return aFlash - bFlash
+        })
+
+        if (valid.length > 0) {
+          liveActiveModels = valid
+          lastFetchedTime = now
+          console.log('[AI] Ayni vaqtda faol va qo\'llab-quvvatlanayotgan modellar:', liveActiveModels)
+          return liveActiveModels
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[AI] Jonli modellarni tekshirishda xatolik:', err?.message)
+  }
+
+  return ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']
+}
 
 /**
  * Universal xavfsiz generatsiya:
- * 1. Avval gemini-3.8-flash ni chaqiradi.
- * 2. Agar 503 (High demand) yoki 429 bo'lsa, 1.5 soniya kutib yana 1 marta o'sha modelga urinadi.
- * 3. Agar server baribir band bo'lsa, foydalanuvchiga xato chiqarmasdan darhol navbatdagi eng yaqin modelga o'tadi!
+ * 1. Google API'dan AYNAN HOZIR FAOL bo'lgan modellar ro'yxatini oladi.
+ * 2. Avval gemini-3.8-flash ga urinadi.
+ * 3. Agar 503/429 bo'lsa, 1.5s kutib qayta urinadi.
+ * 4. Agar eskirgan bo'lsa (404/deprecated) yoki server band bo'lsa, ro'yxatdagi boshqa JONLI modelga o'tadi.
  */
 async function generateWithSafety(
   promptOrParts: any,
   jsonMode: boolean = true,
   maxRetries: number = 2
 ) {
+  const activeModels = await getLiveActiveModels()
   let lastError: any = null
 
-  for (const modelName of MODEL_CASCADE) {
+  // gemini-3.8-flash ro'yxat boshida bo'lishini ta'minlaymiz (agar mavjud bo'lsa)
+  const sortedModels = [
+    ...activeModels.filter((m) => m.includes('3.8')),
+    ...activeModels.filter((m) => !m.includes('3.8'))
+  ]
+
+  for (const modelName of sortedModels) {
     try {
       const model = genAI.getGenerativeModel({
         model: modelName,
@@ -50,14 +92,14 @@ async function generateWithSafety(
             err?.message?.includes('Overloaded') ||
             err?.message?.includes('Resource has been exhausted')
 
-          console.warn(`[AI] ${modelName} (urinish ${attempt}) band/xato: ${err?.message}`)
+          console.warn(`[AI] ${modelName} (urinish ${attempt}) xato: ${err?.message}`)
 
           if (isOverloaded && attempt < maxRetries) {
             console.log(`[AI] 503/429 aniqlandi. 1.5s kutib qayta urinilmoqda...`)
             await sleep(1500)
             continue
           }
-          break // Zaxiradagi keyingi modelga o'tish
+          break // Keyingi faol modelga o'tish
         }
       }
     } catch (err: any) {
@@ -111,7 +153,7 @@ Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 }
 
 /**
- * Ovozli xabarni tahlil qilish (avval 3.8-flash, band bo'lsa zaxiraga o'tadi)
+ * Ovozli xabarni tahlil qilish
  */
 export async function analyzeAudioMessage(audioBase64: string, mimeType: string = 'audio/ogg') {
   const prompt = `
