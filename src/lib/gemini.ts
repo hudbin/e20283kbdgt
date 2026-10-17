@@ -110,6 +110,54 @@ async function generateWithSafety(
   throw lastError || new Error("AI serverlari hozirda band.")
 }
 
+export interface CategoryContextItem {
+  name: string
+  type?: 'EXPENSE' | 'INCOME' | string
+}
+
+export function formatCategoriesPrompt(categories: Array<CategoryContextItem | string> = []): string {
+  if (!categories || categories.length === 0) {
+    return `Kategoriya tanlashda: Xarajat yoki kirim mazmuniga mos, qisqa va aniq yangi kategoriya nomini taklif qil (masalan: "Oziq-ovqat", "Transport", "Kiyim", "Maosh"). "is_new_category": true deb belgilang.`
+  }
+
+  const expenseList: string[] = []
+  const incomeList: string[] = []
+  const genericList: string[] = []
+
+  for (const item of categories) {
+    if (typeof item === 'string') {
+      genericList.push(item)
+    } else if (item.type === 'INCOME') {
+      incomeList.push(item.name)
+    } else if (item.type === 'EXPENSE') {
+      expenseList.push(item.name)
+    } else {
+      genericList.push(item.name)
+    }
+  }
+
+  let text = `Foydalanuvchining ma'lumotlar bazasidagi mavjud kategoriyalari:`
+  if (expenseList.length > 0) {
+    text += `\n- Chiqimlar (EXPENSE) uchun mavjud: [${expenseList.join(', ')}]`
+  }
+  if (incomeList.length > 0) {
+    text += `\n- Kirimlar (INCOME) uchun mavjud: [${incomeList.join(', ')}]`
+  }
+  if (genericList.length > 0) {
+    text += `\n- Boshqa mavjud: [${genericList.join(', ')}]`
+  }
+
+  text += `
+
+MUHIM KATEGORIYA TANLASH QOIDASI:
+1. Birinchi navbatda xabar mazmunini chuqur tahlil qilib, yuqoridagi MAVJUD kategoriyalar ro'yxatidan eng mos keladiganini tanla.
+   - Masalan: Agar mavjud kategoriyalar ichida "Transport" bo'lsa va foydalanuvchi "taksiga 15000", "benzinga 50000" yoki "avtobusga 2000" desa, yangi kategoriya yaratmasdan AYNAN "Transport" deb tanla va "is_new_category": false qil.
+   - Agar mavjud kategoriyalar ichida "Oziq-ovqat" bo'lsa va foydalanuvchi "lavash 35000", "non 4000", "bozorlik 120000" desa, AYNAN "Oziq-ovqat" deb tanla va "is_new_category": false qil.
+2. Faqat va faqat yuqoridagi mavjud ro'yxatda xabar mazmuniga mos keladigan biron bir kategoriya mutlaqo bo'lmasa (yoki mos kelishi juda noaniq bo'lsa), o'zing eng munosib yangi kategoriya nomini taklif qil va "is_new_category": true deb belgilang.`
+
+  return text
+}
+
 /**
  * Matnli xabarni niyatini aniqlash:
  * - TRANSACTION (kiritish)
@@ -117,9 +165,16 @@ async function generateWithSafety(
  * - QUERY (savol/tahlil so'rash)
  * - OTHER
  */
-export async function analyzeTextMessage(text: string) {
+export async function analyzeTextMessage(
+  text: string,
+  existingCategories: Array<CategoryContextItem | string> = []
+) {
+  const categoriesContext = formatCategoriesPrompt(existingCategories)
+
   const prompt = `
 Sen aqlli shaxsiy moliyaviy yordamchi AIsan. Foydalanuvchi quyidagi xabarni yozdi: "${text}"
+
+${categoriesContext}
 
 Vazifang xabarni 4 turdan biriga ajratish:
 1. REPORT: Foydalanuvchi hisobotni fayl (PDF/Excel) sifatida so'ragan bo'lsa (masalan: "O'tgan oy hisobotini ber pdf va excel fayllarni", "bu oylik hisobotni excelda tashla", "menga hisobot faylini yubor", "pdf hisobot ber").
@@ -132,7 +187,8 @@ Vazifang xabarni 4 turdan biriga ajratish:
    action: "TRANSACTION"
    type: "EXPENSE" yoki "INCOME"
    amount: son
-   category: Kategoriya nomi
+   category: Kategoriya nomi (mavjud ro'yxatdan eng mosi yoki yangi taklif)
+   is_new_category: boolean (mavjud bo'lsa false, yangi taklif bo'lsa true)
    description: qisqa izoh
 
 3. QUERY: O'z budjeti haqida oddiy savol/tahlil so'ragan bo'lsa (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kecha qancha xarajat qildim?").
@@ -147,6 +203,7 @@ Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
+  "is_new_category": boolean | null,
   "description": string | null,
   "report_period": "month" | "last_month" | "year" | "all" | null,
   "report_formats": ["pdf", "excel"] | null
@@ -158,7 +215,13 @@ Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 /**
  * Ovozli xabarni tahlil qilish
  */
-export async function analyzeAudioMessage(audioBase64: string, mimeType: string = 'audio/ogg') {
+export async function analyzeAudioMessage(
+  audioBase64: string,
+  mimeType: string = 'audio/ogg',
+  existingCategories: Array<CategoryContextItem | string> = []
+) {
+  const categoriesContext = formatCategoriesPrompt(existingCategories)
+
   const prompt = `
 Foydalanuvchi ovozli xabar yubordi.
 Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
@@ -167,11 +230,14 @@ Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
 3. Agar o'z xarajatlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
 4. Boshqa bo'lsa -> action: "OTHER"
 
+${categoriesContext}
+
 {
   "action": "TRANSACTION" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
+  "is_new_category": boolean | null,
   "description": string | null,
   "report_period": "month" | "last_month" | "year" | "all" | null,
   "report_formats": ["pdf", "excel"] | null

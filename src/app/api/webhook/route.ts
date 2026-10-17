@@ -80,10 +80,25 @@ export async function POST(req: Request) {
       let parsedData: any = null
       let originalPromptText = text || ""
 
+      // Bazadan foydalanuvchining mavjud kategoriyalarini olamiz
+      let existingCategories: Array<{ name: string; type: string }> = []
+      try {
+        const { data: catData } = await supabase
+          .from('categories')
+          .select('name, type')
+          .or(`telegram_id.eq.${from.id},is_default.eq.true`)
+
+        if (catData && catData.length > 0) {
+          existingCategories = catData
+        }
+      } catch (catErr) {
+        console.error("Kategoriyalarni yuklashda xatolik:", catErr)
+      }
+
       if (text) {
         await sendTypingAction(chat.id, 'typing')
         try {
-          const responseText = await analyzeTextMessage(text)
+          const responseText = await analyzeTextMessage(text, existingCategories)
           parsedData = JSON.parse(responseText)
         } catch (e: any) {
           console.error("AI Text Error:", e)
@@ -102,7 +117,7 @@ export async function POST(req: Request) {
             const audioBuffer = await audioStreamRes.arrayBuffer()
             const audioBase64 = Buffer.from(audioBuffer).toString('base64')
 
-            const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg')
+            const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg', existingCategories)
             parsedData = JSON.parse(responseText)
             originalPromptText = parsedData?.description || "Ovozli xabar"
           } else {
@@ -215,13 +230,15 @@ export async function POST(req: Request) {
         const categoryLabel = parsedData.category || (parsedData.type === 'EXPENSE' ? 'Xarajat' : 'Daromad')
         const amountNum = Number(parsedData.amount)
         const descText = parsedData.description ? `\n📝 <b>Izoh:</b> ${parsedData.description}` : ''
+        const categoryBadge = parsedData.is_new_category ? ' <i>(Yangi taklif 🆕)</i>' : ''
 
-        const confirmMessage = `<b>Tahlil qilindi:</b>\n\n📌 <b>Tur:</b> ${typeLabel}\n💰 <b>Summa:</b> ${amountNum.toLocaleString()} so'm\n📂 <b>Kategoriya:</b> ${categoryLabel}${descText}\n\nMa'lumotlarni tasdiqlaysizmi?`
+        const confirmMessage = `<b>Tahlil qilindi:</b>\n\n📌 <b>Tur:</b> ${typeLabel}\n💰 <b>Summa:</b> ${amountNum.toLocaleString()} so'm\n📂 <b>Kategoriya:</b> ${categoryLabel}${categoryBadge}${descText}\n\nMa'lumotlarni tasdiqlaysizmi?`
 
+        const safeCat = encodeURIComponent(categoryLabel.slice(0, 25))
         await sendMessage(chat.id, confirmMessage, {
           inline_keyboard: [
             [
-              { text: "✅ Tasdiqlash", callback_data: `c_${parsedData.type[0]}_${amountNum}_${encodeURIComponent(categoryLabel.slice(0, 20))}` },
+              { text: "✅ Tasdiqlash", callback_data: `c_${parsedData.type[0]}_${amountNum}_${safeCat}` },
               { text: "❌ Bekor qilish", callback_data: "cancel" }
             ]
           ]
@@ -254,20 +271,25 @@ export async function POST(req: Request) {
         const categoryName = decodeURIComponent(parts[3] || (type === 'EXPENSE' ? 'Xarajat' : 'Daromad'))
 
         let categoryId = null
+        // 1. Dastlab bazadan mavjud kategoriya qidiriladi (shaxsiy yoki default)
         const { data: catData } = await supabase
            .from('categories')
            .select('id')
-           .eq('telegram_id', fromId)
-           .eq('name', categoryName)
-           .single()
+           .or(`telegram_id.eq.${fromId},is_default.eq.true`)
+           .ilike('name', categoryName)
+           .order('is_default', { ascending: true })
+           .limit(1)
+           .maybeSingle()
            
         if (catData) {
           categoryId = catData.id
         } else {
+          // 2. Agar mavjud bo'lmasa, AI taklif qilgan yangi kategoriya bazaga kiritiladi
           const { data: newCat } = await supabase
             .from('categories')
-            .insert({ telegram_id: fromId, name: categoryName, type })
-            .select('id').single()
+            .insert({ telegram_id: fromId, name: categoryName, type, is_default: false })
+            .select('id')
+            .single()
           if (newCat) categoryId = newCat.id
         }
 
