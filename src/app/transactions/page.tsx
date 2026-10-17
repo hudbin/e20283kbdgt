@@ -41,6 +41,8 @@ export default function AllTransactionsPage() {
 
   useEffect(() => {
     setMounted(true);
+    let cleanupBackButton: (() => void) | null = null;
+
     if (typeof window !== "undefined" && window.Telegram && window.Telegram.WebApp) {
       const tg = window.Telegram.WebApp;
       tg.ready();
@@ -52,7 +54,7 @@ export default function AllTransactionsPage() {
           router.push("/");
         };
         tg.BackButton.onClick(handleBack);
-        return () => {
+        cleanupBackButton = () => {
           tg.BackButton?.offClick(handleBack);
           tg.BackButton?.hide();
         };
@@ -67,6 +69,12 @@ export default function AllTransactionsPage() {
     } else {
       loadTransactions(123456789);
     }
+
+    return () => {
+      if (cleanupBackButton) {
+        cleanupBackButton();
+      }
+    };
   }, [router]);
 
   const loadTransactions = async (telegramId: number) => {
