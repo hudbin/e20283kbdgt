@@ -37,6 +37,23 @@ CREATE TABLE chat_history (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- Qarzlar va kreditlar jadvali
+CREATE TABLE debts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE CASCADE,
+  person_name TEXT NOT NULL,
+  type TEXT CHECK (type IN ('LENT', 'BORROWED', 'LOAN')) NOT NULL,
+  amount NUMERIC NOT NULL,
+  paid_amount NUMERIC DEFAULT 0 NOT NULL,
+  due_date TIMESTAMP WITH TIME ZONE,
+  status TEXT CHECK (status IN ('ACTIVE', 'PAID')) DEFAULT 'ACTIVE' NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Tranzaksiyalar jadvaliga qarz id ustunini ulash
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS debt_id UUID REFERENCES debts(id) ON DELETE SET NULL;
+
 -- RLS (Row Level Security) - Agar so'rovlar bevosita frontend orqali kelsa kerak bo'ladi. 
 -- API routes orqali ishlasak (Service Role ishlatib) buni o'chirib qo'yishimiz yoki policy yozishimiz mumkin.
 -- Hozircha Mini App o'zining telegram_id sini biladi deb hisoblab oddiy qoldiramiz.

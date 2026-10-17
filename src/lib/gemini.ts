@@ -160,7 +160,8 @@ MUHIM KATEGORIYA TANLASH QOIDASI:
 
 /**
  * Matnli xabarni niyatini aniqlash:
- * - TRANSACTION (kiritish)
+ * - TRANSACTION (oddiy kiritish)
+ * - DEBT (qarz berish, qarz olish, kredit, qarz qaytarish)
  * - REPORT (fayl sifatida hisobot so'rash)
  * - QUERY (savol/tahlil so'rash)
  * - OTHER
@@ -176,14 +177,30 @@ Sen aqlli shaxsiy moliyaviy yordamchi AIsan. Foydalanuvchi quyidagi xabarni yozd
 
 ${categoriesContext}
 
-Vazifang xabarni 4 turdan biriga ajratish:
+Vazifang xabarni 5 turdan biriga ajratish:
 1. REPORT: Foydalanuvchi hisobotni fayl (PDF/Excel) sifatida so'ragan bo'lsa (masalan: "O'tgan oy hisobotini ber pdf va excel fayllarni", "bu oylik hisobotni excelda tashla", "menga hisobot faylini yubor", "pdf hisobot ber").
    Bunda:
    action: "REPORT"
    report_period: "month" | "last_month" | "year" | "all"
    report_formats: ("pdf" | "excel") ro'yxati (masalan: ["pdf", "excel"] yoki faqat ["pdf"])
 
-2. TRANSACTION: Yangi xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "taksiga 15000 ketdi", "oylik tushdi 3 mln").
+2. DEBT: Qarz berish, qarz olish, kredit olish, qarzni qaytarish yoki kredit to'lash bilan bog'liq amallar.
+   Misollar:
+   - "Aliga 200 ming qarz berdim" -> action: "DEBT", debt_action: "LEND", person_name: "Ali", amount: 200000
+   - "Vali akadan 500 ming qarz oldim" -> action: "DEBT", debt_action: "BORROW", person_name: "Vali aka", amount: 500000
+   - "Bankdan 10 mln kredit oldim" -> action: "DEBT", debt_action: "LOAN", person_name: "Bank", amount: 10000000
+   - "Vali akaga 500 ming qarzni qaytardim" -> action: "DEBT", debt_action: "REPAY", person_name: "Vali aka", amount: 500000
+   - "Kreditga 1 mln to'ladim" -> action: "DEBT", debt_action: "REPAY", person_name: "Kredit", amount: 1000000
+   - "Ali 200 ming qarzini qaytardi" -> action: "DEBT", debt_action: "RECEIVE", person_name: "Ali", amount: 200000
+   Bunda:
+   action: "DEBT"
+   debt_action: "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE"
+   person_name: Shaxs yoki bank/tashkilot nomi
+   amount: son
+   due_date: string | null (agar qaytarish sanasi ko'rsatilgan bo'lsa)
+   description: qisqa izoh
+
+3. TRANSACTION: Oddiy xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "taksiga 15000 ketdi", "oylik tushdi 3 mln").
    action: "TRANSACTION"
    type: "EXPENSE" yoki "INCOME"
    amount: son
@@ -191,19 +208,22 @@ Vazifang xabarni 4 turdan biriga ajratish:
    is_new_category: boolean (mavjud bo'lsa false, yangi taklif bo'lsa true)
    description: qisqa izoh
 
-3. QUERY: O'z budjeti haqida oddiy savol/tahlil so'ragan bo'lsa (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kecha qancha xarajat qildim?").
+4. QUERY: O'z budjeti yoki qarzlari haqida savol/tahlil so'ragan bo'lsa (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kimdan qancha qarzim bor?", "Menga kimlar qarz?").
    action: "QUERY"
 
-4. OTHER: Boshqa har qanday suhbat.
+5. OTHER: Boshqa har qanday suhbat yoki noaniq gap.
    action: "OTHER"
 
 Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 {
-  "action": "TRANSACTION" | "REPORT" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
   "is_new_category": boolean | null,
+  "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
+  "person_name": string | null,
+  "due_date": string | null,
   "description": string | null,
   "report_period": "month" | "last_month" | "year" | "all" | null,
   "report_formats": ["pdf", "excel"] | null
@@ -225,19 +245,23 @@ export async function analyzeAudioMessage(
   const prompt = `
 Foydalanuvchi ovozli xabar yubordi.
 Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
-1. Agar yangi kirim yoki chiqim bo'lsa -> action: "TRANSACTION"
-2. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
-3. Agar o'z xarajatlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
-4. Boshqa bo'lsa -> action: "OTHER"
+1. Agar yangi oddiy kirim yoki chiqim bo'lsa -> action: "TRANSACTION", type: "EXPENSE"|"INCOME", amount, category
+2. Agar qarz berish, qarz olish, kredit olish yoki qarzni to'lash bo'lsa -> action: "DEBT", debt_action: "LEND"|"BORROW"|"LOAN"|"REPAY"|"RECEIVE", person_name, amount, due_date
+3. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
+4. Agar o'z xarajatlari yoki qarzlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
+5. Boshqa bo'lsa -> action: "OTHER"
 
 ${categoriesContext}
 
 {
-  "action": "TRANSACTION" | "REPORT" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
   "is_new_category": boolean | null,
+  "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
+  "person_name": string | null,
+  "due_date": string | null,
   "description": string | null,
   "report_period": "month" | "last_month" | "year" | "all" | null,
   "report_formats": ["pdf", "excel"] | null
@@ -259,7 +283,11 @@ ${categoriesContext}
 /**
  * Foydalanuvchining savoliga bazadagi ma'lumotlar asosida aqlli javob qaytarish
  */
-export async function answerFinancialQuery(userQuestion: string, transactionsContext: any[]) {
+export async function answerFinancialQuery(
+  userQuestion: string,
+  transactionsContext: any[],
+  debtsContext: any[] = []
+) {
   const prompt = `
 Sen shaxsiy moliyaviy maslahatchi va tahlilchisan.
 Foydalanuvchi savoli: "${userQuestion}"
@@ -267,11 +295,15 @@ Foydalanuvchi savoli: "${userQuestion}"
 Quyida foydalanuvchining ma'lumotlar bazasidagi oxirgi tranzaksiyalari (kirim va chiqimlari):
 ${JSON.stringify(transactionsContext, null, 2)}
 
+Quyida foydalanuvchining ma'lumotlar bazasidagi qarz va kreditlari (debts):
+${JSON.stringify(debtsContext, null, 2)}
+
 Vazifang:
 1. Bazadagi ma'lumotlarni chuqur tahlil qil.
-2. Agar savol ma'lum bir toifaga tegishli bo'lsa, mos yozuvlarni topib summalarini hisobla.
-3. Foydalanuvchiga Telegram formatida (HTML teglari bilan: <b>bold</b>, <i>italic</i>) do'stona, aniq va lo'nda javob qaytar.
-4. Javob o'zbek tilida, professional va dalda beruvchi ohangda bo'lsin.
+2. Agar savol qarzlar ("Kimdan qarzim bor?", "Menga kimlar qarz?", "Kredit qoldig'im qancha?") haqida bo'lsa, qarzlar ro'yxatidan aniq hisoblab ber.
+3. Agar savol ma'lum bir xarajat/kirim toifasiga tegishli bo'lsa, mos yozuvlarni topib summalarini hisobla.
+4. Foydalanuvchiga Telegram formatida (HTML teglari bilan: <b>bold</b>, <i>italic</i>) do'stona, aniq va lo'nda javob qaytar.
+5. Javob o'zbek tilida, professional va dalda beruvchi ohangda bo'lsin.
 `
 
   return generateWithSafety(prompt, false)

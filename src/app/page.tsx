@@ -12,6 +12,7 @@ import {
   ArrowRight,
   TrendingDown,
   PieChart,
+  HandCoins,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -41,6 +42,7 @@ const CATEGORY_COLORS = [
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [debtsSummary, setDebtsSummary] = useState<{ lent: number; borrowed: number } | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Toggle davr filtri: Bugun, Hafta, Oy, Boshqa
@@ -64,12 +66,15 @@ export default function Home() {
       if (tg.initDataUnsafe?.user) {
         setUser(tg.initDataUnsafe.user);
         fetchTransactions(tg.initDataUnsafe.user.id);
+        fetchDebtsSummary(tg.initDataUnsafe.user.id);
       } else {
         // Test fallback (brauzerda sinab ko'rish uchun)
         fetchTransactions(123456789);
+        fetchDebtsSummary(123456789);
       }
     } else {
       fetchTransactions(123456789);
+      fetchDebtsSummary(123456789);
     }
   }, []);
 
@@ -85,6 +90,24 @@ export default function Home() {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDebtsSummary = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/debts?telegram_id=${telegramId}&status=ACTIVE`);
+      const data = await res.json();
+      if (data.debts) {
+        const lent = data.debts
+          .filter((d: any) => d.type === 'LENT')
+          .reduce((acc: number, curr: any) => acc + (Number(curr.amount) - Number(curr.paid_amount)), 0);
+        const borrowed = data.debts
+          .filter((d: any) => d.type === 'BORROWED' || d.type === 'LOAN')
+          .reduce((acc: number, curr: any) => acc + (Number(curr.amount) - Number(curr.paid_amount)), 0);
+        setDebtsSummary({ lent, borrowed });
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -372,6 +395,43 @@ export default function Home() {
             <span className="font-semibold text-xs">Chiqim qo'shish</span>
           </Link>
         </div>
+
+        {/* QARZLAR VA KREDITLAR VIDJETI */}
+        <Link
+          href="/debts"
+          className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 hover:border-gray-200 transition flex flex-col gap-2.5 active:scale-[0.99]"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                <HandCoins size={16} />
+              </div>
+              <div>
+                <h3 className="font-bold text-xs text-gray-900">Qarzlar va Kreditlar</h3>
+                <p className="text-[10px] text-gray-400">Majburiyatlar va to'lovlar hisobi</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-600">
+              <span>Barchasi</span>
+              <ArrowRight size={13} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-xs">
+            <div className="bg-green-50/50 p-2.5 rounded-xl border border-green-100/70">
+              <span className="text-[10px] text-green-700 block font-medium">Menga qaytishi kerak</span>
+              <span className="font-bold text-green-600">
+                +{debtsSummary ? debtsSummary.lent.toLocaleString() : "0"} so'm
+              </span>
+            </div>
+            <div className="bg-rose-50/50 p-2.5 rounded-xl border border-rose-100/70">
+              <span className="text-[10px] text-rose-700 block font-medium">Mening qarzlarim</span>
+              <span className="font-bold text-rose-600">
+                -{debtsSummary ? debtsSummary.borrowed.toLocaleString() : "0"} so'm
+              </span>
+            </div>
+          </div>
+        </Link>
 
         {/* KATEGORIYALAR BO'YICHA JAMI SARFLANGAN SUMMALAR */}
         <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-3">

@@ -211,6 +211,12 @@ export async function POST(req: Request) {
           .order('date', { ascending: false })
           .limit(100)
 
+        const { data: userDebts } = await supabase
+          .from('debts')
+          .select('*')
+          .eq('telegram_id', from.id)
+          .order('created_at', { ascending: false })
+
         const simplifiedData = (userTransactions || []).map((t: any) => ({
           amount: t.amount,
           type: t.type,
@@ -219,12 +225,63 @@ export async function POST(req: Request) {
           date: t.date
         }))
 
-        const aiAnswer = await answerFinancialQuery(originalPromptText, simplifiedData)
+        const simplifiedDebts = (userDebts || []).map((d: any) => ({
+          person_name: d.person_name,
+          type: d.type === 'LENT' ? 'Berilgan qarz' : d.type === 'LOAN' ? 'Bank krediti' : 'Olingan qarz',
+          total_amount: d.amount,
+          paid_amount: d.paid_amount,
+          remaining_amount: Number(d.amount) - Number(d.paid_amount),
+          status: d.status === 'PAID' ? 'Yopilgan' : 'Faol',
+          due_date: d.due_date
+        }))
+
+        const aiAnswer = await answerFinancialQuery(originalPromptText, simplifiedData, simplifiedDebts)
         await sendMessage(chat.id, aiAnswer)
         return NextResponse.json({ ok: true })
       }
 
-      // 3. Agar yangi TRANZAKSIYA bo'lsa:
+      // 3. Agar QARZ yoki KREDIT amaliyoti bo'lsa (DEBT):
+      if (parsedData?.action === 'DEBT' && parsedData?.amount) {
+        const debtAction = parsedData.debt_action || 'LEND'
+        const personName = (parsedData.person_name || 'Nomaʼlum').trim()
+        const amountNum = Number(parsedData.amount)
+        const dueText = parsedData.due_date ? `\n📅 <b>Muddat:</b> ${parsedData.due_date}` : ''
+        const descText = parsedData.description ? `\n📝 <b>Izoh:</b> ${parsedData.description}` : ''
+
+        let actionTitle = ''
+        let actionDesc = ''
+        if (debtAction === 'LEND') {
+          actionTitle = '🤝 Qarz berish'
+          actionDesc = `👤 <b>Kimga:</b> ${personName}\n💡 <i>(Hamyondan chiqim boʻladi va qarzlar daftaringizga yoziladi)</i>`
+        } else if (debtAction === 'BORROW') {
+          actionTitle = '📥 Qarz olish'
+          actionDesc = `👤 <b>Kimdan:</b> ${personName}\n💡 <i>(Hamyonga kirim boʻladi va qarz majburiyati ochiladi)</i>`
+        } else if (debtAction === 'LOAN') {
+          actionTitle = '🏦 Kredit olish'
+          actionDesc = `🏛 <b>Bank/Tashkilot:</b> ${personName}\n💡 <i>(Hamyonga kirim boʻladi va kredit ochiladi)</i>`
+        } else if (debtAction === 'REPAY') {
+          actionTitle = '💸 Qarz/Kredit toʻlash'
+          actionDesc = `👤 <b>Kimga:</b> ${personName}\n💡 <i>(Hamyondan chiqim boʻladi va qarz qoldigʻi kamayadi)</i>`
+        } else if (debtAction === 'RECEIVE') {
+          actionTitle = '💰 Qarz qaytib kelishi'
+          actionDesc = `👤 <b>Kimdan:</b> ${personName}\n💡 <i>(Hamyonga kirim boʻladi va qarz yopiladi)</i>`
+        }
+
+        const confirmMessage = `<b>Qarz amaliyoti tahlil qilindi:</b>\n\n📌 <b>Amal:</b> ${actionTitle}\n💰 <b>Summa:</b> ${amountNum.toLocaleString()} so'm\n${actionDesc}${dueText}${descText}\n\nMa'lumotlarni tasdiqlaysizmi?`
+
+        const safePerson = encodeURIComponent(personName.slice(0, 25))
+        await sendMessage(chat.id, confirmMessage, {
+          inline_keyboard: [
+            [
+              { text: "✅ Tasdiqlash", callback_data: `d_${debtAction}_${amountNum}_${safePerson}` },
+              { text: "❌ Bekor qilish", callback_data: "cancel" }
+            ]
+          ]
+        })
+        return NextResponse.json({ ok: true })
+      }
+
+      // 4. Agar yangi TRANZAKSIYA bo'lsa:
       if (parsedData?.type && parsedData?.amount) {
         const typeLabel = parsedData.type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'
         const categoryLabel = parsedData.category || (parsedData.type === 'EXPENSE' ? 'Xarajat' : 'Daromad')
@@ -244,7 +301,7 @@ export async function POST(req: Request) {
           ]
         })
       } else if (text || voice) {
-        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i>, hisobot uchun: <i>\"O'tgan oy hisobotini ber pdf va excelda\"</i> deb yozing.")
+        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i>, qarz uchun: <i>\"Aliga 200 ming qarz berdim\"</i> deb yozing.")
       }
 
     } else if (body.callback_query) {
@@ -311,6 +368,180 @@ export async function POST(req: Request) {
             parse_mode: 'HTML'
           })
         })
+      } else if (data.startsWith('d_')) {
+        const parts = data.split('_')
+        const debtAction = parts[1] // LEND, BORROW, LOAN, REPAY, RECEIVE
+        const amount = parseFloat(parts[2])
+        const personName = decodeURIComponent(parts[3] || 'Nomaʼlum')
+
+        if (debtAction === 'LEND') {
+          const { data: newDebt } = await supabase
+            .from('debts')
+            .insert({
+              telegram_id: fromId,
+              person_name: personName,
+              type: 'LENT',
+              amount,
+              paid_amount: 0,
+              status: 'ACTIVE'
+            })
+            .select('id')
+            .single()
+
+          await supabase.from('transactions').insert({
+            telegram_id: fromId,
+            amount,
+            type: 'EXPENSE',
+            description: `Qarz berildi: ${personName}`,
+            debt_id: newDebt?.id || null
+          })
+
+          await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              message_id: messageId,
+              text: `✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n🤝 <b>Qarz berildi:</b> ${amount.toLocaleString()} so'm (${personName})\n<i>(Hamyondan yechildi va qarzlar daftaringizga kiritildi)</i>`,
+              parse_mode: 'HTML'
+            })
+          })
+        } else if (debtAction === 'BORROW' || debtAction === 'LOAN') {
+          const debtType = debtAction === 'LOAN' ? 'LOAN' : 'BORROWED'
+          const { data: newDebt } = await supabase
+            .from('debts')
+            .insert({
+              telegram_id: fromId,
+              person_name: personName,
+              type: debtType,
+              amount,
+              paid_amount: 0,
+              status: 'ACTIVE'
+            })
+            .select('id')
+            .single()
+
+          await supabase.from('transactions').insert({
+            telegram_id: fromId,
+            amount,
+            type: 'INCOME',
+            description: debtAction === 'LOAN' ? `Kredit olindi: ${personName}` : `Qarz olindi: ${personName}`,
+            debt_id: newDebt?.id || null
+          })
+
+          await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              message_id: messageId,
+              text: `✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n📥 <b>${debtAction === 'LOAN' ? 'Kredit' : 'Qarz'} olindi:</b> ${amount.toLocaleString()} so'm (${personName})\n<i>(Hamyonga qo'shildi va majburiyat ochildi)</i>`,
+              parse_mode: 'HTML'
+            })
+          })
+        } else if (debtAction === 'REPAY') {
+          // Olingan qarz yoki kreditni to'lash
+          const { data: activeDebts } = await supabase
+            .from('debts')
+            .select('*')
+            .eq('telegram_id', fromId)
+            .in('type', ['BORROWED', 'LOAN'])
+            .eq('status', 'ACTIVE')
+            .ilike('person_name', `%${personName}%`)
+            .limit(1)
+
+          let debt = activeDebts?.[0]
+          if (!debt) {
+            const { data: anyDebts } = await supabase
+              .from('debts')
+              .select('*')
+              .eq('telegram_id', fromId)
+              .in('type', ['BORROWED', 'LOAN'])
+              .eq('status', 'ACTIVE')
+              .order('created_at', { ascending: false })
+              .limit(1)
+            debt = anyDebts?.[0]
+          }
+
+          let remainingText = ''
+          if (debt) {
+            const newPaid = Math.min(Number(debt.amount), Number(debt.paid_amount) + amount)
+            const newStatus = newPaid >= Number(debt.amount) ? 'PAID' : 'ACTIVE'
+            await supabase.from('debts').update({ paid_amount: newPaid, status: newStatus }).eq('id', debt.id)
+            const rem = Math.max(0, Number(debt.amount) - newPaid)
+            remainingText = newStatus === 'PAID' ? '\n🎉 <i>Ushbu qarz/kredit toʻliq yopildi!</i>' : `\nQoldiq: <b>${rem.toLocaleString()} so'm</b>`
+          }
+
+          await supabase.from('transactions').insert({
+            telegram_id: fromId,
+            amount,
+            type: 'EXPENSE',
+            description: `Qarz to'landi: ${debt?.person_name || personName}`,
+            debt_id: debt?.id || null
+          })
+
+          await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              message_id: messageId,
+              text: `✅ <b>Toʻlov qabul qilindi!</b>\n\n💸 <b>Qarz toʻlovi:</b> ${amount.toLocaleString()} so'm (${debt?.person_name || personName})${remainingText}\n<i>(Hamyondan chiqim qilindi)</i>`,
+              parse_mode: 'HTML'
+            })
+          })
+        } else if (debtAction === 'RECEIVE') {
+          // Berilgan qarzning qaytishi
+          const { data: activeDebts } = await supabase
+            .from('debts')
+            .select('*')
+            .eq('telegram_id', fromId)
+            .eq('type', 'LENT')
+            .eq('status', 'ACTIVE')
+            .ilike('person_name', `%${personName}%`)
+            .limit(1)
+
+          let debt = activeDebts?.[0]
+          if (!debt) {
+            const { data: anyDebts } = await supabase
+              .from('debts')
+              .select('*')
+              .eq('telegram_id', fromId)
+              .eq('type', 'LENT')
+              .eq('status', 'ACTIVE')
+              .order('created_at', { ascending: false })
+              .limit(1)
+            debt = anyDebts?.[0]
+          }
+
+          let remainingText = ''
+          if (debt) {
+            const newPaid = Math.min(Number(debt.amount), Number(debt.paid_amount) + amount)
+            const newStatus = newPaid >= Number(debt.amount) ? 'PAID' : 'ACTIVE'
+            await supabase.from('debts').update({ paid_amount: newPaid, status: newStatus }).eq('id', debt.id)
+            const rem = Math.max(0, Number(debt.amount) - newPaid)
+            remainingText = newStatus === 'PAID' ? '\n🎉 <i>Qarz toʻliq qaytarildi va yopildi!</i>' : `\nQolgan qarz: <b>${rem.toLocaleString()} so'm</b>`
+          }
+
+          await supabase.from('transactions').insert({
+            telegram_id: fromId,
+            amount,
+            type: 'INCOME',
+            description: `Qarz qaytdi: ${debt?.person_name || personName}`,
+            debt_id: debt?.id || null
+          })
+
+          await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              message_id: messageId,
+              text: `✅ <b>Qarz qaytishi saqlandi!</b>\n\n💰 <b>Qaytarildi:</b> ${amount.toLocaleString()} so'm (${debt?.person_name || personName})${remainingText}\n<i>(Hamyonga kirim qilindi)</i>`,
+              parse_mode: 'HTML'
+            })
+          })
+        }
       }
     }
 
