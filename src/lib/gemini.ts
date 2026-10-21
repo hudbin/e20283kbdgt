@@ -158,6 +158,22 @@ MUHIM KATEGORIYA TANLASH QOIDASI:
   return text
 }
 
+export interface AccountContextItem {
+  id: string
+  name: string
+  type: string
+}
+
+export function formatAccountsPrompt(accounts: Array<AccountContextItem | string> = []): string {
+  if (!accounts || accounts.length === 0) {
+    return ''
+  }
+
+  const list = accounts.map(a => (typeof a === 'string' ? a : `${a.name} (${a.type})`))
+  return `Foydalanuvchining hisoblari va kartalari (Accounts): [${list.join(', ')}]
+Agar xabarda ushbu hisoblardan biri aytilgan yoki nazarda tutilgan bo'lsa (masalan "Anorbankdan 50 ming", "Uzcardga tushdi", "Kredit kartadan ishlatdim"), mos hisob nomini "account_name" ga yoz. Agar xabarda aniq aytilmagan bo'lsa, "account_name": null qoldir.`
+}
+
 /**
  * Matnli xabarni niyatini aniqlash:
  * - TRANSACTION (oddiy kiritish)
@@ -168,14 +184,18 @@ MUHIM KATEGORIYA TANLASH QOIDASI:
  */
 export async function analyzeTextMessage(
   text: string,
-  existingCategories: Array<CategoryContextItem | string> = []
+  existingCategories: Array<CategoryContextItem | string> = [],
+  existingAccounts: Array<AccountContextItem | string> = []
 ) {
   const categoriesContext = formatCategoriesPrompt(existingCategories)
+  const accountsContext = formatAccountsPrompt(existingAccounts)
 
   const prompt = `
 Sen aqlli shaxsiy moliyaviy yordamchi AIsan. Foydalanuvchi quyidagi xabarni yozdi: "${text}"
 
 ${categoriesContext}
+
+${accountsContext}
 
 Vazifang xabarni 5 turdan biriga ajratish:
 1. REPORT: Foydalanuvchi hisobotni fayl (PDF/Excel) sifatida so'ragan bo'lsa (masalan: "O'tgan oy hisobotini ber pdf va excel fayllarni", "bu oylik hisobotni excelda tashla", "menga hisobot faylini yubor", "pdf hisobot ber").
@@ -184,13 +204,14 @@ Vazifang xabarni 5 turdan biriga ajratish:
    report_period: "month" | "last_month" | "year" | "all"
    report_formats: ("pdf" | "excel") ro'yxati (masalan: ["pdf", "excel"] yoki faqat ["pdf"])
 
-2. DEBT: Qarz berish, qarz olish, kredit olish, qarzni qaytarish yoki kredit to'lash bilan bog'liq amallar.
+2. DEBT: Qarz berish, qarz olish, bank krediti, mikroqarz olish, qarzni qaytarish yoki kredit to'lash bilan bog'liq amallar.
    Misollar:
    - "Aliga 200 ming qarz berdim" -> action: "DEBT", debt_action: "LEND", person_name: "Ali", amount: 200000
    - "Vali akadan 500 ming qarz oldim" -> action: "DEBT", debt_action: "BORROW", person_name: "Vali aka", amount: 500000
+   - "TBC dan 5 mln mikroqarz oldim" -> action: "DEBT", debt_action: "LOAN", person_name: "TBC", amount: 5000000
    - "Bankdan 10 mln kredit oldim" -> action: "DEBT", debt_action: "LOAN", person_name: "Bank", amount: 10000000
    - "Vali akaga 500 ming qarzni qaytardim" -> action: "DEBT", debt_action: "REPAY", person_name: "Vali aka", amount: 500000
-   - "Kreditga 1 mln to'ladim" -> action: "DEBT", debt_action: "REPAY", person_name: "Kredit", amount: 1000000
+   - "TBC kreditiga 600 ming to'ladim" -> action: "DEBT", debt_action: "REPAY", person_name: "TBC", amount: 600000
    - "Ali 200 ming qarzini qaytardi" -> action: "DEBT", debt_action: "RECEIVE", person_name: "Ali", amount: 200000
    Bunda:
    action: "DEBT"
@@ -200,15 +221,16 @@ Vazifang xabarni 5 turdan biriga ajratish:
    due_date: string | null (agar qaytarish sanasi ko'rsatilgan bo'lsa)
    description: qisqa izoh
 
-3. TRANSACTION: Oddiy xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "taksiga 15000 ketdi", "oylik tushdi 3 mln").
+3. TRANSACTION: Oddiy xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "Anorbankdan 15000 taksiga ketdi", "oylik tushdi 3 mln").
    action: "TRANSACTION"
    type: "EXPENSE" yoki "INCOME"
    amount: son
    category: Kategoriya nomi (mavjud ro'yxatdan eng mosi yoki yangi taklif)
    is_new_category: boolean (mavjud bo'lsa false, yangi taklif bo'lsa true)
+   account_name: Foydalanuvchi aytgan hisob/karta nomi yoki null
    description: qisqa izoh
 
-4. QUERY: O'z budjeti yoki qarzlari haqida savol/tahlil so'ragan bo'lsa (masalan: "Oxirgi oyda ichimliklar uchun qancha sarfladim?", "Kimdan qancha qarzim bor?", "Menga kimlar qarz?").
+4. QUERY: O'z budjeti, kreditlari, kredit kartalari yoki qarzlari haqida savol/tahlil so'ragan bo'lsa (masalan: "Bu oy qancha kredit to'lashim kerak?", "Kredit kartamda qancha foizsiz davr qoldi?", "Oxirgi oyda oziq-ovqatga qancha sarfladim?", "Menda qancha balans qoldi?").
    action: "QUERY"
 
 5. OTHER: Boshqa har qanday suhbat yoki noaniq gap.
@@ -221,6 +243,7 @@ Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
   "amount": number | null,
   "category": string | null,
   "is_new_category": boolean | null,
+  "account_name": string | null,
   "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
   "person_name": string | null,
   "due_date": string | null,
@@ -238,27 +261,32 @@ Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 export async function analyzeAudioMessage(
   audioBase64: string,
   mimeType: string = 'audio/ogg',
-  existingCategories: Array<CategoryContextItem | string> = []
+  existingCategories: Array<CategoryContextItem | string> = [],
+  existingAccounts: Array<AccountContextItem | string> = []
 ) {
   const categoriesContext = formatCategoriesPrompt(existingCategories)
+  const accountsContext = formatAccountsPrompt(existingAccounts)
 
   const prompt = `
 Foydalanuvchi ovozli xabar yubordi.
 Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
-1. Agar yangi oddiy kirim yoki chiqim bo'lsa -> action: "TRANSACTION", type: "EXPENSE"|"INCOME", amount, category
+${categoriesContext}
+${accountsContext}
+
+1. Agar yangi oddiy kirim yoki chiqim bo'lsa -> action: "TRANSACTION", type: "EXPENSE"|"INCOME", amount, category, account_name
 2. Agar qarz berish, qarz olish, kredit olish yoki qarzni to'lash bo'lsa -> action: "DEBT", debt_action: "LEND"|"BORROW"|"LOAN"|"REPAY"|"RECEIVE", person_name, amount, due_date
 3. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
-4. Agar o'z xarajatlari yoki qarzlari haqida savol so'rayotgan bo'lsa -> action: "QUERY"
-5. Boshqa bo'lsa -> action: "OTHER"
+4. Agar savol yoki tahlil so'rayotgan bo'lsa (masalan "Kreditlarim qancha qoldi?") -> action: "QUERY"
+5. Noma'lum bo'lsa -> action: "OTHER"
 
-${categoriesContext}
-
+Javobni FAQAT to'g'ri JSON formatida qaytar:
 {
   "action": "TRANSACTION" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
   "category": string | null,
   "is_new_category": boolean | null,
+  "account_name": string | null,
   "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
   "person_name": string | null,
   "due_date": string | null,
@@ -286,22 +314,26 @@ ${categoriesContext}
 export async function answerFinancialQuery(
   userQuestion: string,
   transactionsContext: any[],
-  debtsContext: any[] = []
+  debtsContext: any[] = [],
+  accountsContext: any[] = []
 ) {
   const prompt = `
 Sen shaxsiy moliyaviy maslahatchi va tahlilchisan.
 Foydalanuvchi savoli: "${userQuestion}"
 
+Quyida foydalanuvchining hisoblari va kartalari (accounts):
+${JSON.stringify(accountsContext, null, 2)}
+
 Quyida foydalanuvchining ma'lumotlar bazasidagi oxirgi tranzaksiyalari (kirim va chiqimlari):
 ${JSON.stringify(transactionsContext, null, 2)}
 
-Quyida foydalanuvchining ma'lumotlar bazasidagi qarz va kreditlari (debts):
+Quyida foydalanuvchining ma'lumotlar bazasidagi qarz, mikroqarz, kredit va kredit kartalari (debts):
 ${JSON.stringify(debtsContext, null, 2)}
 
 Vazifang:
 1. Bazadagi ma'lumotlarni chuqur tahlil qil.
-2. Agar savol qarzlar ("Kimdan qarzim bor?", "Menga kimlar qarz?", "Kredit qoldig'im qancha?") haqida bo'lsa, qarzlar ro'yxatidan aniq hisoblab ber.
-3. Agar savol ma'lum bir xarajat/kirim toifasiga tegishli bo'lsa, mos yozuvlarni topib summalarini hisobla.
+2. Agar savol kreditlar, to'lov sanalari ("Bu oy qancha kredit to'lashim kerak?", "Kredit qoldig'im qancha?", "Kimdan qancha qarzim bor?") haqida bo'lsa, qarzlar va kredit kartalarning oylik to'lovlari hamda qoldiqlarini aniq hisoblab tushuntir.
+3. Agar savol hisoblar/kartalar balansi haqida bo'lsa ("Balansim qancha?", "Kartamda qancha bor?"), accounts ro'yxatidan aniq aytib ber.
 4. Foydalanuvchiga Telegram formatida (HTML teglari bilan: <b>bold</b>, <i>italic</i>) do'stona, aniq va lo'nda javob qaytar.
 5. Javob o'zbek tilida, professional va dalda beruvchi ohangda bo'lsin.
 `

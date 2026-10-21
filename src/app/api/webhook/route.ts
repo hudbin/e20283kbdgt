@@ -131,10 +131,25 @@ export async function POST(req: Request) {
         console.error("Kategoriyalarni yuklashda xatolik:", catErr)
       }
 
+      // Bazadan foydalanuvchining mavjud hisoblarini olamiz
+      let existingAccounts: any[] = []
+      try {
+        const { data: accData } = await supabase
+          .from('accounts')
+          .select('id, name, type, is_default, balance')
+          .eq('telegram_id', from.id)
+
+        if (accData && accData.length > 0) {
+          existingAccounts = accData
+        }
+      } catch (accErr) {
+        console.error("Hisoblarni yuklashda xatolik:", accErr)
+      }
+
       if (text) {
         await sendTypingAction(chat.id, 'typing')
         try {
-          const responseText = await analyzeTextMessage(text, existingCategories)
+          const responseText = await analyzeTextMessage(text, existingCategories, existingAccounts)
           parsedData = JSON.parse(responseText)
         } catch (e: any) {
           console.error("AI Text Error:", e)
@@ -153,7 +168,7 @@ export async function POST(req: Request) {
             const audioBuffer = await audioStreamRes.arrayBuffer()
             const audioBase64 = Buffer.from(audioBuffer).toString('base64')
 
-            const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg', existingCategories)
+            const responseText = await analyzeAudioMessage(audioBase64, voice.mime_type || 'audio/ogg', existingCategories, existingAccounts)
             parsedData = JSON.parse(responseText)
             originalPromptText = parsedData?.description || "Ovozli xabar"
           } else {
@@ -271,7 +286,12 @@ export async function POST(req: Request) {
           due_date: d.due_date
         }))
 
-        const aiAnswer = await answerFinancialQuery(originalPromptText, simplifiedData, simplifiedDebts)
+        const { data: userAccounts } = await supabase
+          .from('accounts')
+          .select('*')
+          .eq('telegram_id', from.id)
+
+        const aiAnswer = await answerFinancialQuery(originalPromptText, simplifiedData, simplifiedDebts, userAccounts || [])
         await sendMessage(chat.id, aiAnswer)
         return NextResponse.json({ ok: true })
       }
@@ -325,13 +345,28 @@ export async function POST(req: Request) {
         const descText = parsedData.description ? `\n📝 <b>Izoh:</b> ${parsedData.description}` : ''
         const categoryBadge = parsedData.is_new_category ? ' <i>(Yangi taklif 🆕)</i>' : ''
 
-        const confirmMessage = `<b>Tahlil qilindi:</b>\n\n📌 <b>Tur:</b> ${typeLabel}\n💰 <b>Summa:</b> ${amountNum.toLocaleString()} so'm\n📂 <b>Kategoriya:</b> ${categoryLabel}${categoryBadge}${descText}\n\nMa'lumotlarni tasdiqlaysizmi?`
+        // Hisobni aniqlash
+        let chosenAccount: any = null
+        if (parsedData.account_name && existingAccounts.length > 0) {
+          chosenAccount = existingAccounts.find(a => 
+            a.name.toLowerCase().includes(parsedData.account_name.toLowerCase()) ||
+            parsedData.account_name.toLowerCase().includes(a.name.toLowerCase())
+          )
+        }
+        if (!chosenAccount && existingAccounts.length > 0) {
+          chosenAccount = existingAccounts.find(a => a.is_default) || existingAccounts[0]
+        }
+
+        const accountText = chosenAccount ? `\n💳 <b>Hisob:</b> ${chosenAccount.name}` : ''
+        const accountIdParam = chosenAccount ? chosenAccount.id : 'none'
+
+        const confirmMessage = `<b>Tahlil qilindi:</b>\n\n📌 <b>Tur:</b> ${typeLabel}\n💰 <b>Summa:</b> ${amountNum.toLocaleString()} so'm\n📂 <b>Kategoriya:</b> ${categoryLabel}${categoryBadge}${accountText}${descText}\n\nMa'lumotlarni tasdiqlaysizmi?`
 
         const safeCat = encodeURIComponent(categoryLabel.slice(0, 25))
         await sendMessage(chat.id, confirmMessage, {
           inline_keyboard: [
             [
-              { text: "✅ Tasdiqlash", callback_data: `c_${parsedData.type[0]}_${amountNum}_${safeCat}` },
+              { text: "✅ Tasdiqlash", callback_data: `c_${parsedData.type[0]}_${amountNum}_${safeCat}_${accountIdParam}` },
               { text: "❌ Bekor qilish", callback_data: "cancel" }
             ]
           ]
@@ -362,6 +397,7 @@ export async function POST(req: Request) {
         const type = parts[1] === 'E' ? 'EXPENSE' : 'INCOME'
         const amount = parseFloat(parts[2])
         const categoryName = decodeURIComponent(parts[3] || (type === 'EXPENSE' ? 'Xarajat' : 'Daromad'))
+        const accountId = parts[4] && parts[4] !== 'none' ? parts[4] : null
 
         let categoryId = null
         // 1. Dastlab bazadan mavjud kategoriya qidiriladi (shaxsiy yoki default)
@@ -389,10 +425,27 @@ export async function POST(req: Request) {
         const { data: insertedTx } = await supabase.from('transactions').insert({
           telegram_id: fromId,
           category_id: categoryId,
+          account_id: accountId,
           amount,
           type,
           description: "Telegram orqali kiritildi"
         }).select('id').single()
+
+        let accountLabel = ''
+        if (accountId) {
+          const { data: acc } = await supabase
+            .from('accounts')
+            .select('name, balance')
+            .eq('id', accountId)
+            .single()
+
+          if (acc) {
+            accountLabel = `\n💳 <b>Hisob:</b> ${acc.name}`
+            const curBal = Number(acc.balance) || 0
+            const newBal = type === 'EXPENSE' ? curBal - amount : curBal + amount
+            await supabase.from('accounts').update({ balance: newBal }).eq('id', accountId)
+          }
+        }
 
         await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
           method: 'POST',
@@ -400,7 +453,7 @@ export async function POST(req: Request) {
           body: JSON.stringify({
             chat_id: chatId,
             message_id: messageId,
-            text: `✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n${type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'}: ${amount.toLocaleString()} so'm (${categoryName})`,
+            text: `✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n${type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'}: ${amount.toLocaleString()} so'm (${categoryName})${accountLabel}`,
             parse_mode: 'HTML',
             reply_markup: insertedTx?.id ? {
               inline_keyboard: [
@@ -411,6 +464,15 @@ export async function POST(req: Request) {
         })
       } else if (data.startsWith('del_tx_')) {
         const txId = data.replace('del_tx_', '')
+        
+        // O'chirishdan oldin hisob balansini tiklash uchun ma'lumot olamiz
+        const { data: txToDel } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('id', txId)
+          .eq('telegram_id', fromId)
+          .maybeSingle()
+
         const { error } = await supabase
           .from('transactions')
           .delete()
@@ -420,6 +482,21 @@ export async function POST(req: Request) {
         if (error) {
           await sendMessage(chatId, "❌ Tranzaksiyani o'chirishda xatolik yuz berdi.")
         } else {
+          if (txToDel && txToDel.account_id) {
+            const { data: acc } = await supabase
+              .from('accounts')
+              .select('balance')
+              .eq('id', txToDel.account_id)
+              .single()
+
+            if (acc) {
+              const curBal = Number(acc.balance) || 0
+              const txAmount = Number(txToDel.amount) || 0
+              const restoredBal = txToDel.type === 'INCOME' ? curBal - txAmount : curBal + txAmount
+              await supabase.from('accounts').update({ balance: restoredBal }).eq('id', txToDel.account_id)
+            }
+          }
+
           await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

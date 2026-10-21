@@ -14,7 +14,7 @@ export async function GET(req: Request) {
 
     let query = supabase
       .from('debts')
-      .select('*')
+      .select('*, accounts(id, name, type, color)')
       .eq('telegram_id', Number(telegramId))
       .order('created_at', { ascending: false })
 
@@ -46,19 +46,25 @@ export async function POST(req: Request) {
       amount,
       due_date,
       description,
-      affect_wallet = true
+      affect_wallet = true,
+      monthly_payment = 0,
+      payment_day = null,
+      is_credit_card = false,
+      credit_limit = 0,
+      grace_due_day = null,
+      account_id = null
     } = body
 
-    if (!telegram_id || !person_name || !type || !amount) {
+    if (!telegram_id || !person_name || !type || amount === undefined) {
       return NextResponse.json({ error: 'Majburiy maydonlar to\'ldirilmagan' }, { status: 400 })
     }
 
     const numAmount = Number(amount)
-    if (isNaN(numAmount) || numAmount <= 0) {
+    if (isNaN(numAmount) || numAmount < 0) {
       return NextResponse.json({ error: 'Noto\'g\'ri summa' }, { status: 400 })
     }
 
-    // 1. Qarzlar jadvaliga qo'shish
+    // 1. Qarzlar/Kreditlar jadvaliga qo'shish
     const { data: newDebt, error: debtError } = await supabase
       .from('debts')
       .insert({
@@ -69,17 +75,23 @@ export async function POST(req: Request) {
         paid_amount: 0,
         due_date: due_date || null,
         status: 'ACTIVE',
-        description: description || ''
+        description: description || '',
+        monthly_payment: Number(monthly_payment) || 0,
+        payment_day: payment_day ? Number(payment_day) : null,
+        is_credit_card: Boolean(is_credit_card),
+        credit_limit: Number(credit_limit) || 0,
+        grace_due_day: grace_due_day ? Number(grace_due_day) : null,
+        account_id: account_id || null
       })
-      .select()
+      .select('*, accounts(id, name, type, color)')
       .single()
 
     if (debtError) throw debtError
 
-    // 2. Agar hamyon balansiga ta'sir qilishi so'ralgan bo'lsa:
+    // 2. Agar hamyon balansiga ta'sir qilishi so'ralgan bo'lsa va summa > 0 bo'lsa:
     // - LENT (qarz berdim) -> Chiqim (cho'ntakdan ketdi)
     // - BORROWED / LOAN (qarz/kredit oldim) -> Kirim (cho'ntakka kirdi)
-    if (affect_wallet && newDebt) {
+    if (affect_wallet && newDebt && numAmount > 0) {
       const txType = type === 'LENT' ? 'EXPENSE' : 'INCOME'
       const descLabel =
         type === 'LENT'
@@ -90,12 +102,28 @@ export async function POST(req: Request) {
 
       await supabase.from('transactions').insert({
         telegram_id: Number(telegram_id),
+        account_id: account_id || null,
         amount: numAmount,
         type: txType,
         description: descLabel,
         debt_id: newDebt.id,
         date: new Date().toISOString()
       })
+
+      // Agar hisob belgilangan bo'lsa, balansini ham yangilaymiz
+      if (account_id) {
+        const { data: acc } = await supabase
+          .from('accounts')
+          .select('balance')
+          .eq('id', account_id)
+          .single()
+
+        if (acc) {
+          const currentBal = Number(acc.balance) || 0
+          const updatedBal = txType === 'INCOME' ? currentBal + numAmount : currentBal - numAmount
+          await supabase.from('accounts').update({ balance: updatedBal }).eq('id', account_id)
+        }
+      }
     }
 
     return NextResponse.json({ debt: newDebt })
@@ -107,7 +135,17 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const body = await req.json()
-    const { id, telegram_id, amount, note, mark_as_paid = false } = body
+    const {
+      id,
+      telegram_id,
+      amount,
+      note,
+      mark_as_paid = false,
+      account_id = null,
+      monthly_payment,
+      payment_day,
+      grace_due_day
+    } = body
 
     if (!id || !telegram_id) {
       return NextResponse.json({ error: 'id va telegram_id kerak' }, { status: 400 })
@@ -123,6 +161,25 @@ export async function PATCH(req: Request) {
 
     if (fetchErr || !debt) {
       return NextResponse.json({ error: 'Qarz topilmadi' }, { status: 404 })
+    }
+
+    // Agar bu shunchaki parametrlarni yangilash bo'lsa (to'lov emas)
+    if (amount === undefined && !mark_as_paid) {
+      const updatePayload: any = {}
+      if (monthly_payment !== undefined) updatePayload.monthly_payment = Number(monthly_payment)
+      if (payment_day !== undefined) updatePayload.payment_day = payment_day ? Number(payment_day) : null
+      if (grace_due_day !== undefined) updatePayload.grace_due_day = grace_due_day ? Number(grace_due_day) : null
+      if (account_id !== undefined) updatePayload.account_id = account_id
+
+      const { data: updatedDebtOnly, error: errUpdate } = await supabase
+        .from('debts')
+        .update(updatePayload)
+        .eq('id', id)
+        .select('*, accounts(id, name, type, color)')
+        .single()
+
+      if (errUpdate) throw errUpdate
+      return NextResponse.json({ debt: updatedDebtOnly })
     }
 
     const payAmount = mark_as_paid ? Number(debt.amount) - Number(debt.paid_amount) : Number(amount)
@@ -141,7 +198,7 @@ export async function PATCH(req: Request) {
         status: newStatus
       })
       .eq('id', id)
-      .select()
+      .select('*, accounts(id, name, type, color)')
       .single()
 
     if (updateErr) throw updateErr
@@ -157,14 +214,32 @@ export async function PATCH(req: Request) {
         ? `Kredit to'landi: ${debt.person_name}${note ? ` (${note})` : ''}`
         : `Qarz qaytarildi: ${debt.person_name}${note ? ` (${note})` : ''}`
 
+    const chosenAccountId = account_id || debt.account_id || null
+
     await supabase.from('transactions').insert({
       telegram_id: Number(telegram_id),
+      account_id: chosenAccountId,
       amount: payAmount,
       type: txType,
       description: descLabel,
       debt_id: debt.id,
       date: new Date().toISOString()
     })
+
+    // 4. Tanlangan hisob balansini yangilaymiz
+    if (chosenAccountId) {
+      const { data: acc } = await supabase
+        .from('accounts')
+        .select('balance')
+        .eq('id', chosenAccountId)
+        .single()
+
+      if (acc) {
+        const curBal = Number(acc.balance) || 0
+        const nextBal = txType === 'INCOME' ? curBal + payAmount : curBal - payAmount
+        await supabase.from('accounts').update({ balance: nextBal }).eq('id', chosenAccountId)
+      }
+    }
 
     return NextResponse.json({ debt: updatedDebt })
   } catch (error: any) {

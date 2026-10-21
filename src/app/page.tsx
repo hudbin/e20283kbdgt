@@ -14,6 +14,13 @@ import {
   PieChart,
   HandCoins,
   Trash2,
+  Wallet,
+  CreditCard,
+  AlertTriangle,
+  Plus,
+  X,
+  ShieldCheck,
+  CheckCircle2
 } from "lucide-react";
 import Link from "next/link";
 
@@ -24,6 +31,50 @@ interface Transaction {
   description: string;
   date: string;
   categories?: { name: string } | null;
+  accounts?: { name: string; type: string; color?: string } | null;
+}
+
+interface AccountItem {
+  id: string;
+  name: string;
+  type: string;
+  balance: number;
+  credit_limit?: number;
+  grace_due_day?: number;
+  color?: string;
+  is_default?: boolean;
+}
+
+interface UpcomingPayment {
+  id: string;
+  person_name: string;
+  type: string;
+  is_credit_card: boolean;
+  remaining_debt: number;
+  payment_amount: number;
+  due_date: string;
+  days_left: number;
+  account_name?: string | null;
+}
+
+interface CreditCardItem {
+  id: string;
+  name: string;
+  credit_limit: number;
+  spent_amount: number;
+  available_limit: number;
+  grace_due_day: number;
+  days_left: number;
+}
+
+interface AnalyticsSummary {
+  net_worth: number;
+  total_assets: number;
+  total_liabilities: number;
+  total_receivables: number;
+  accounts: AccountItem[];
+  upcoming_payments: UpcomingPayment[];
+  credit_cards: CreditCardItem[];
 }
 
 type PeriodFilter = "today" | "week" | "month" | "custom";
@@ -43,7 +94,7 @@ const CATEGORY_COLORS = [
 export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [debtsSummary, setDebtsSummary] = useState<{ lent: number; borrowed: number } | null>(null);
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Toggle davr filtri: Bugun, Hafta, Oy, Boshqa
@@ -54,6 +105,15 @@ export default function Home() {
   const [customEnd, setCustomEnd] = useState("");
   const [mounted, setMounted] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Yangi hisob/karta qo'shish modal holati
+  const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
+  const [accName, setAccName] = useState("");
+  const [accType, setAccType] = useState<"DEBIT_CARD" | "CREDIT_CARD" | "CASH">("DEBIT_CARD");
+  const [accBalance, setAccBalance] = useState("");
+  const [accLimit, setAccLimit] = useState("");
+  const [accGraceDueDay, setAccGraceDueDay] = useState("20");
+  const [submittingAcc, setSubmittingAcc] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -67,18 +127,32 @@ export default function Home() {
       tg.expand();
       if (tg.initDataUnsafe?.user) {
         setUser(tg.initDataUnsafe.user);
-        fetchTransactions(tg.initDataUnsafe.user.id);
-        fetchDebtsSummary(tg.initDataUnsafe.user.id);
+        loadAllData(tg.initDataUnsafe.user.id);
       } else {
         // Test fallback (brauzerda sinab ko'rish uchun)
-        fetchTransactions(123456789);
-        fetchDebtsSummary(123456789);
+        loadAllData(123456789);
       }
     } else {
-      fetchTransactions(123456789);
-      fetchDebtsSummary(123456789);
+      loadAllData(123456789);
     }
   }, []);
+
+  const loadAllData = (telegramId: number) => {
+    fetchTransactions(telegramId);
+    fetchSummary(telegramId);
+  };
+
+  const fetchSummary = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/analytics/summary?telegram_id=${telegramId}`);
+      const data = await res.json();
+      if (data && !data.error) {
+        setSummary(data);
+      }
+    } catch (e) {
+      console.error("Summary yuklashda xatolik:", e);
+    }
+  };
 
   const fetchTransactions = async (telegramId: number) => {
     try {
@@ -95,21 +169,37 @@ export default function Home() {
     }
   };
 
-  const fetchDebtsSummary = async (telegramId: number) => {
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accName.trim()) return;
+
     try {
-      const res = await fetch(`/api/debts?telegram_id=${telegramId}&status=ACTIVE`);
+      setSubmittingAcc(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          name: accName.trim(),
+          type: accType,
+          balance: Number(accBalance) || 0,
+          credit_limit: Number(accLimit) || 0,
+          grace_due_day: accGraceDueDay ? Number(accGraceDueDay) : null
+        })
+      });
       const data = await res.json();
-      if (data.debts) {
-        const lent = data.debts
-          .filter((d: any) => d.type === 'LENT')
-          .reduce((acc: number, curr: any) => acc + (Number(curr.amount) - Number(curr.paid_amount)), 0);
-        const borrowed = data.debts
-          .filter((d: any) => d.type === 'BORROWED' || d.type === 'LOAN')
-          .reduce((acc: number, curr: any) => acc + (Number(curr.amount) - Number(curr.paid_amount)), 0);
-        setDebtsSummary({ lent, borrowed });
+      if (data.account) {
+        setIsAddAccountModalOpen(false);
+        setAccName("");
+        setAccBalance("");
+        setAccLimit("");
+        fetchSummary(telegramId);
       }
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error("Hisob qo'shishda xatolik:", err);
+    } finally {
+      setSubmittingAcc(false);
     }
   };
 
@@ -127,6 +217,7 @@ export default function Home() {
 
         if (res.ok && data.success) {
           setTransactions((prev) => prev.filter((t) => t.id !== id));
+          fetchSummary(telegramId);
           if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
             window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
           }
@@ -309,6 +400,157 @@ export default function Home() {
       </header>
 
       <main className="flex-1 p-4 flex flex-col gap-4">
+        {/* 1. SOF MOLIYAVIY HOLAT (NET WORTH) KARTASI */}
+        <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white rounded-3xl p-5 shadow-md flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-medium text-gray-300 flex items-center gap-1.5">
+              <ShieldCheck size={14} className="text-blue-400" /> Sof Moliyaviy Holat (Net Worth)
+            </span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+              (summary?.net_worth ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+            }`}>
+              {(summary?.net_worth ?? 0) >= 0 ? "Musbat balans" : "Kredit yuki"}
+            </span>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-black tracking-tight">
+              {summary ? `${summary.net_worth.toLocaleString()} so'm` : `${allTimeBalance.toLocaleString()} so'm`}
+            </h2>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              Aktivlar (kartalar/naqd) minus barcha kredit va majburiyatlar
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-700/60 text-xs">
+            <div className="bg-white/5 p-2.5 rounded-xl border border-white/5">
+              <span className="text-[10px] text-emerald-400 block font-medium flex items-center gap-1">
+                💰 Jami pullar (Aktivlar)
+              </span>
+              <span className="font-bold text-sm text-white">
+                +{summary ? summary.total_assets.toLocaleString() : "0"} so'm
+              </span>
+            </div>
+            <div className="bg-white/5 p-2.5 rounded-xl border border-white/5">
+              <span className="text-[10px] text-rose-400 block font-medium flex items-center gap-1">
+                💳 Jami qarzlar (Kreditlar)
+              </span>
+              <span className="font-bold text-sm text-white">
+                -{summary ? summary.total_liabilities.toLocaleString() : "0"} so'm
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. YAQINLASHIB KELAYOTGAN TO'LOVLAR (SMART PIPELINE) */}
+        {summary && summary.upcoming_payments && summary.upcoming_payments.length > 0 && (
+          <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Clock size={15} className="text-blue-600" />
+                <h3 className="font-bold text-xs text-gray-900">
+                  To'lovlar taqvimi ({summary.upcoming_payments.length})
+                </h3>
+              </div>
+              <Link href="/debts" className="text-[11px] font-semibold text-blue-600 flex items-center gap-0.5">
+                <span>Taqvim</span>
+                <ArrowRight size={12} />
+              </Link>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {summary.upcoming_payments.slice(0, 3).map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-gray-50/80 p-2.5 rounded-xl border border-gray-100 flex items-center justify-between text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className={`p-2 rounded-lg ${
+                      item.is_credit_card ? "bg-indigo-50 text-indigo-600" : "bg-blue-50 text-blue-600"
+                    }`}>
+                      {item.is_credit_card ? <CreditCard size={15} /> : <Calendar size={15} />}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-900 text-[11px] leading-tight">
+                        {item.person_name}
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        {item.is_credit_card ? "Grace period to'lovi" : "Oylik kredit to'lovi"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="font-bold text-gray-900 text-xs">
+                      {item.payment_amount.toLocaleString()} so'm
+                    </p>
+                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md inline-block mt-0.5 ${
+                      item.days_left <= 3
+                        ? "bg-rose-100 text-rose-700"
+                        : "bg-blue-100 text-blue-700"
+                    }`}>
+                      {item.days_left <= 0 ? "Bugun to'lov!" : `${item.days_left} kun qoldi`}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 3. MENING HISOB VA KREDIT KARTALARIM (WALLETS & CARDS) */}
+        <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Wallet size={15} className="text-gray-700" />
+              <h3 className="font-bold text-xs text-gray-900">Hisoblar va Kartalar</h3>
+            </div>
+            <button
+              onClick={() => setIsAddAccountModalOpen(true)}
+              className="text-[11px] font-semibold text-blue-600 flex items-center gap-1 active:scale-95 transition"
+            >
+              <Plus size={13} /> Yangi hisob
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {summary?.accounts && summary.accounts.length > 0 ? (
+              summary.accounts.map((acc) => (
+                <div
+                  key={acc.id}
+                  className="bg-gray-50 p-3 rounded-xl border border-gray-100 flex flex-col justify-between gap-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-gray-800 line-clamp-1">
+                      {acc.name}
+                    </span>
+                    {acc.type === "CREDIT_CARD" ? (
+                      <CreditCard size={13} className="text-indigo-600 shrink-0" />
+                    ) : (
+                      <Wallet size={13} className="text-gray-400 shrink-0" />
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 block">Balans:</span>
+                    <span className="font-black text-xs text-gray-900">
+                      {Number(acc.balance).toLocaleString()} so'm
+                    </span>
+                  </div>
+                  {acc.type === "CREDIT_CARD" && acc.grace_due_day && (
+                    <span className="text-[9px] text-indigo-600 font-medium bg-indigo-50 px-1.5 py-0.5 rounded mt-0.5">
+                      Grace: oyning {acc.grace_due_day}-kuni
+                    </span>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 text-center py-3 text-gray-400 text-xs">
+                Hisoblar yuklanmoqda...
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Toggle Filtr Tugmalari: Bugun, Hafta, Oy, Boshqa */}
         <div className="bg-white p-1 rounded-2xl shadow-xs border border-gray-100 flex items-center">
           <button
@@ -464,13 +706,13 @@ export default function Home() {
             <div className="bg-green-50/50 p-2.5 rounded-xl border border-green-100/70">
               <span className="text-[10px] text-green-700 block font-medium">Menga qaytishi kerak</span>
               <span className="font-bold text-green-600">
-                +{debtsSummary ? debtsSummary.lent.toLocaleString() : "0"} so'm
+                +{summary ? summary.total_receivables.toLocaleString() : "0"} so'm
               </span>
             </div>
             <div className="bg-rose-50/50 p-2.5 rounded-xl border border-rose-100/70">
               <span className="text-[10px] text-rose-700 block font-medium">Mening qarzlarim</span>
               <span className="font-bold text-rose-600">
-                -{debtsSummary ? debtsSummary.borrowed.toLocaleString() : "0"} so'm
+                -{summary ? summary.total_liabilities.toLocaleString() : "0"} so'm
               </span>
             </div>
           </div>
@@ -652,6 +894,154 @@ export default function Home() {
           </Link>
         </div>
       </main>
+
+      {/* YANGI HISOB / KREDIT KARTA QO'SHISH MODAL OYNASI */}
+      {isAddAccountModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-sm text-gray-900">Yangi hisob yoki karta qo'shish</h3>
+              <button
+                onClick={() => setIsAddAccountModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateAccount} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Hisob turi
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setAccType("DEBIT_CARD")}
+                    className={`py-2 px-1 rounded-xl text-center font-medium transition ${
+                      accType === "DEBIT_CARD"
+                        ? "bg-blue-600 text-white shadow-xs font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    Debet karta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccType("CREDIT_CARD")}
+                    className={`py-2 px-1 rounded-xl text-center font-medium transition ${
+                      accType === "CREDIT_CARD"
+                        ? "bg-indigo-600 text-white shadow-xs font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    Kredit karta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccType("CASH")}
+                    className={`py-2 px-1 rounded-xl text-center font-medium transition ${
+                      accType === "CASH"
+                        ? "bg-emerald-600 text-white shadow-xs font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    Naqd pul
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Hisob / Karta nomi
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={
+                    accType === "CREDIT_CARD"
+                      ? "Masalan: Anorbank Kredit Karta"
+                      : accType === "CASH"
+                      ? "Masalan: Hamyondagi naqd"
+                      : "Masalan: Uzcard Asosiy"
+                  }
+                  value={accName}
+                  onChange={(e) => setAccName(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                />
+              </div>
+
+              {accType === "CREDIT_CARD" ? (
+                <>
+                  <div>
+                    <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                      Kredit kartasi umumiy limiti (so'm)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      placeholder="Masalan: 10000000"
+                      value={accLimit}
+                      onChange={(e) => setAccLimit(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-semibold"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                        Hozirgi mavjud qoldiq
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="Masalan: 8000000"
+                        value={accBalance}
+                        onChange={(e) => setAccBalance(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                        Grace period to'lov kuni
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="31"
+                        placeholder="Masalan: 20"
+                        value={accGraceDueDay}
+                        onChange={(e) => setAccGraceDueDay(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Joriy balans (so'm)
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="Masalan: 1500000"
+                    value={accBalance}
+                    onChange={(e) => setAccBalance(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-semibold"
+                  />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={submittingAcc}
+                className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingAcc ? "Saqlanmoqda..." : "Hisobni saqlash"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

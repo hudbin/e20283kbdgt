@@ -15,8 +15,19 @@ import {
   Calendar,
   X,
   Trash2,
-  AlertCircle
+  AlertCircle,
+  CreditCard,
+  ShieldCheck,
+  Clock3
 } from "lucide-react";
+
+interface Account {
+  id: string;
+  name: string;
+  type: string;
+  balance: number;
+  color?: string;
+}
 
 interface Debt {
   id: string;
@@ -29,25 +40,39 @@ interface Debt {
   status: "ACTIVE" | "PAID";
   description: string;
   created_at: string;
+  monthly_payment?: number;
+  payment_day?: number | null;
+  is_credit_card?: boolean;
+  credit_limit?: number;
+  grace_due_day?: number | null;
+  account_id?: string | null;
+  accounts?: { id: string; name: string; type: string; color?: string } | null;
 }
 
-type TabType = "ALL" | "LENT" | "BORROWED" | "LOAN" | "PAID";
+type TabType = "ALL" | "LOAN" | "CREDIT_CARD" | "BORROWED" | "LENT" | "PAID";
 
 export default function DebtsPage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [debts, setDebts] = useState<Debt[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("ALL");
 
-  // Yangi qarz modal holati
+  // Yangi qarz/kredit modal holati
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
-  const [newType, setNewType] = useState<"LENT" | "BORROWED" | "LOAN">("LENT");
+  const [newType, setNewType] = useState<"LENT" | "BORROWED" | "LOAN">("LOAN");
   const [newPerson, setNewPerson] = useState("");
   const [newAmount, setNewAmount] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newAffectWallet, setNewAffectWallet] = useState(true);
+  const [newIsCreditCard, setNewIsCreditCard] = useState(false);
+  const [newCreditLimit, setNewCreditLimit] = useState("");
+  const [newGraceDueDay, setNewGraceDueDay] = useState("20");
+  const [newMonthlyPayment, setNewMonthlyPayment] = useState("");
+  const [newPaymentDay, setNewPaymentDay] = useState("10");
+  const [newAccountId, setNewAccountId] = useState("");
   const [submittingNew, setSubmittingNew] = useState(false);
 
   // To'lov kiritish modal holati
@@ -55,6 +80,7 @@ export default function DebtsPage() {
   const [selectedDebt, setSelectedDebt] = useState<Debt | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payNote, setPayNote] = useState("");
+  const [payAccountId, setPayAccountId] = useState("");
   const [submittingPay, setSubmittingPay] = useState(false);
 
   useEffect(() => {
@@ -80,11 +106,14 @@ export default function DebtsPage() {
       if (tg.initDataUnsafe?.user) {
         setUser(tg.initDataUnsafe.user);
         loadDebts(tg.initDataUnsafe.user.id);
+        loadAccounts(tg.initDataUnsafe.user.id);
       } else {
         loadDebts(123456789);
+        loadAccounts(123456789);
       }
     } else {
       loadDebts(123456789);
+      loadAccounts(123456789);
     }
 
     return () => {
@@ -93,6 +122,22 @@ export default function DebtsPage() {
       }
     };
   }, [router]);
+
+  const loadAccounts = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/accounts?telegram_id=${telegramId}`);
+      const data = await res.json();
+      if (data.accounts) {
+        setAccounts(data.accounts);
+        if (data.accounts.length > 0 && !newAccountId) {
+          setNewAccountId(data.accounts[0].id);
+          setPayAccountId(data.accounts[0].id);
+        }
+      }
+    } catch (e) {
+      console.error("Hisoblarni yuklashda xatolik:", e);
+    }
+  };
 
   const loadDebts = async (telegramId: number) => {
     try {
@@ -112,7 +157,10 @@ export default function DebtsPage() {
   // Yangi qarz/kredit qo'shish
   const handleCreateDebt = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPerson.trim() || !newAmount || Number(newAmount) <= 0) return;
+    if (!newPerson.trim()) return;
+
+    const amountNum = Number(newAmount) || 0;
+    if (!newIsCreditCard && amountNum <= 0) return;
 
     try {
       setSubmittingNew(true);
@@ -123,10 +171,16 @@ export default function DebtsPage() {
           telegram_id: user?.id || 123456789,
           person_name: newPerson.trim(),
           type: newType,
-          amount: Number(newAmount),
+          amount: newIsCreditCard ? (amountNum || 0) : amountNum,
           due_date: newDueDate || null,
           description: newDesc.trim(),
-          affect_wallet: newAffectWallet
+          affect_wallet: newAffectWallet,
+          is_credit_card: newIsCreditCard,
+          credit_limit: Number(newCreditLimit) || 0,
+          grace_due_day: newGraceDueDay ? Number(newGraceDueDay) : null,
+          monthly_payment: Number(newMonthlyPayment) || 0,
+          payment_day: newPaymentDay ? Number(newPaymentDay) : null,
+          account_id: newAccountId || null
         })
       });
 
@@ -138,6 +192,9 @@ export default function DebtsPage() {
         setNewAmount("");
         setNewDueDate("");
         setNewDesc("");
+        setNewMonthlyPayment("");
+        setNewCreditLimit("");
+        setNewIsCreditCard(false);
       }
     } catch (err) {
       console.error("Qarz qo'shishda xatolik:", err);
@@ -165,7 +222,8 @@ export default function DebtsPage() {
           telegram_id: user?.id || 123456789,
           amount: amountVal,
           note: payNote.trim(),
-          mark_as_paid: markAsPaid
+          mark_as_paid: markAsPaid,
+          account_id: payAccountId || null
         })
       });
 
@@ -176,6 +234,8 @@ export default function DebtsPage() {
         setSelectedDebt(null);
         setPayAmount("");
         setPayNote("");
+        // Hisoblarni ham qayta yuklaymiz (chunki hisob balansidan yechildi)
+        if (user?.id) loadAccounts(user.id);
       }
     } catch (err) {
       console.error("To'lov kiritishda xatolik:", err);
@@ -218,6 +278,8 @@ export default function DebtsPage() {
   const filteredDebts = debts.filter((d) => {
     if (activeTab === "ALL") return d.status === "ACTIVE";
     if (activeTab === "PAID") return d.status === "PAID";
+    if (activeTab === "CREDIT_CARD") return d.status === "ACTIVE" && d.is_credit_card;
+    if (activeTab === "LOAN") return d.status === "ACTIVE" && d.type === "LOAN" && !d.is_credit_card;
     return d.status === "ACTIVE" && d.type === activeTab;
   });
 
@@ -289,10 +351,10 @@ export default function DebtsPage() {
         </div>
 
         {/* Tab Filters */}
-        <div className="flex bg-white p-1 rounded-xl shadow-xs border border-gray-100 text-xs font-medium overflow-x-auto no-scrollbar">
+        <div className="flex bg-white p-1 rounded-xl shadow-xs border border-gray-100 text-xs font-medium overflow-x-auto no-scrollbar gap-1">
           <button
             onClick={() => setActiveTab("ALL")}
-            className={`flex-1 py-1.5 px-2.5 rounded-lg whitespace-nowrap transition ${
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
               activeTab === "ALL"
                 ? "bg-gray-900 text-white shadow-xs font-semibold"
                 : "text-gray-500 hover:text-gray-900"
@@ -301,18 +363,28 @@ export default function DebtsPage() {
             Faollar ({activeDebts.length})
           </button>
           <button
-            onClick={() => setActiveTab("LENT")}
-            className={`flex-1 py-1.5 px-2.5 rounded-lg whitespace-nowrap transition ${
-              activeTab === "LENT"
-                ? "bg-green-600 text-white shadow-xs font-semibold"
+            onClick={() => setActiveTab("LOAN")}
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
+              activeTab === "LOAN"
+                ? "bg-blue-600 text-white shadow-xs font-semibold"
                 : "text-gray-500 hover:text-gray-900"
             }`}
           >
-            Bergan qarzlarim
+            Kredit & Mikroqarz
+          </button>
+          <button
+            onClick={() => setActiveTab("CREDIT_CARD")}
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
+              activeTab === "CREDIT_CARD"
+                ? "bg-indigo-600 text-white shadow-xs font-semibold"
+                : "text-gray-500 hover:text-gray-900"
+            }`}
+          >
+            Kredit Kartalar
           </button>
           <button
             onClick={() => setActiveTab("BORROWED")}
-            className={`flex-1 py-1.5 px-2.5 rounded-lg whitespace-nowrap transition ${
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
               activeTab === "BORROWED"
                 ? "bg-amber-600 text-white shadow-xs font-semibold"
                 : "text-gray-500 hover:text-gray-900"
@@ -321,18 +393,18 @@ export default function DebtsPage() {
             Olgan qarzlarim
           </button>
           <button
-            onClick={() => setActiveTab("LOAN")}
-            className={`flex-1 py-1.5 px-2.5 rounded-lg whitespace-nowrap transition ${
-              activeTab === "LOAN"
-                ? "bg-blue-600 text-white shadow-xs font-semibold"
+            onClick={() => setActiveTab("LENT")}
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
+              activeTab === "LENT"
+                ? "bg-green-600 text-white shadow-xs font-semibold"
                 : "text-gray-500 hover:text-gray-900"
             }`}
           >
-            Kreditlar
+            Bergan qarzlarim
           </button>
           <button
             onClick={() => setActiveTab("PAID")}
-            className={`flex-1 py-1.5 px-2.5 rounded-lg whitespace-nowrap transition ${
+            className={`py-1.5 px-3 rounded-lg whitespace-nowrap transition ${
               activeTab === "PAID"
                 ? "bg-gray-600 text-white shadow-xs font-semibold"
                 : "text-gray-500 hover:text-gray-900"
@@ -365,6 +437,7 @@ export default function DebtsPage() {
               const isLent = item.type === "LENT";
               const isLoan = item.type === "LOAN";
               const isPaid = item.status === "PAID";
+              const isCreditCard = Boolean(item.is_credit_card);
 
               return (
                 <div
@@ -377,6 +450,8 @@ export default function DebtsPage() {
                         className={`p-2.5 rounded-xl ${
                           isPaid
                             ? "bg-gray-100 text-gray-600"
+                            : isCreditCard
+                            ? "bg-indigo-50 text-indigo-600"
                             : isLent
                             ? "bg-green-50 text-green-600"
                             : isLoan
@@ -386,6 +461,8 @@ export default function DebtsPage() {
                       >
                         {isPaid ? (
                           <CheckCircle2 size={18} />
+                        ) : isCreditCard ? (
+                          <CreditCard size={18} />
                         ) : isLoan ? (
                           <Landmark size={18} />
                         ) : isLent ? (
@@ -395,7 +472,7 @@ export default function DebtsPage() {
                         )}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <h4 className="font-bold text-xs text-gray-900 leading-tight">
                             {item.person_name}
                           </h4>
@@ -403,6 +480,8 @@ export default function DebtsPage() {
                             className={`text-[9px] font-semibold px-2 py-0.5 rounded-md ${
                               isPaid
                                 ? "bg-gray-100 text-gray-500"
+                                : isCreditCard
+                                ? "bg-indigo-100 text-indigo-700"
                                 : isLent
                                 ? "bg-green-100 text-green-700"
                                 : isLoan
@@ -412,19 +491,38 @@ export default function DebtsPage() {
                           >
                             {isPaid
                               ? "Yopilgan"
+                              : isCreditCard
+                              ? "Kredit Karta (Grace)"
                               : isLent
                               ? "Qarz berilgan"
                               : isLoan
-                              ? "Bank krediti"
+                              ? "Kredit / Mikroqarz"
                               : "Qarz olingan"}
                           </span>
+                          {item.accounts?.name && (
+                            <span className="text-[9px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                              💳 {item.accounts.name}
+                            </span>
+                          )}
                         </div>
                         {item.description && (
                           <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
                             {item.description}
                           </p>
                         )}
-                        {item.due_date && (
+                        {/* Imtiyoz davri yoki oylik to'lov sanasi */}
+                        {isCreditCard && item.grace_due_day && (
+                          <p className="text-[10px] text-indigo-600 font-medium mt-0.5 flex items-center gap-1">
+                            <ShieldCheck size={11} /> Grace period: har oyning {item.grace_due_day}-kuni foizsiz yopish
+                          </p>
+                        )}
+                        {!isCreditCard && item.payment_day && (
+                          <p className="text-[10px] text-blue-600 font-medium mt-0.5 flex items-center gap-1">
+                            <Clock3 size={11} /> Har oyning {item.payment_day}-sanasida to'lov
+                            {item.monthly_payment ? ` (${Number(item.monthly_payment).toLocaleString()} so'm)` : ''}
+                          </p>
+                        )}
+                        {item.due_date && !item.payment_day && !isCreditCard && (
                           <p className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1">
                             <Calendar size={11} /> Qaytarish muddati:{" "}
                             {new Date(item.due_date).toLocaleDateString("uz-UZ")}
@@ -571,15 +669,85 @@ export default function DebtsPage() {
                 </div>
               </div>
 
+              {/* Agar Kredit bo'lsa: Kredit karta yoki oddiy kredit */}
+              {newType === "LOAN" && (
+                <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100 flex flex-col gap-2.5">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="isCreditCardCheck"
+                      checked={newIsCreditCard}
+                      onChange={(e) => setNewIsCreditCard(e.target.checked)}
+                      className="rounded text-blue-600"
+                    />
+                    <label htmlFor="isCreditCardCheck" className="text-[11px] font-semibold text-gray-800 cursor-pointer">
+                      Bu kredit karta (imtiyozli grace period bilan)
+                    </label>
+                  </div>
+
+                  {newIsCreditCard ? (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-0.5 font-medium">Kredit limiti (so'm)</label>
+                        <input
+                          type="number"
+                          placeholder="Masalan: 10000000"
+                          value={newCreditLimit}
+                          onChange={(e) => setNewCreditLimit(e.target.value)}
+                          className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-0.5 font-medium">Grace to'lov kuni (oyning)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          placeholder="Masalan: 20"
+                          value={newGraceDueDay}
+                          onChange={(e) => setNewGraceDueDay(e.target.value)}
+                          className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-0.5 font-medium">Oylik to'lov summasi</label>
+                        <input
+                          type="number"
+                          placeholder="Masalan: 650000"
+                          value={newMonthlyPayment}
+                          onChange={(e) => setNewMonthlyPayment(e.target.value)}
+                          className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-0.5 font-medium">Oylik to'lov kuni</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          placeholder="Masalan: 10"
+                          value={newPaymentDay}
+                          onChange={(e) => setNewPaymentDay(e.target.value)}
+                          className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Shaxs yoki bank nomi */}
               <div>
                 <label className="text-[11px] font-semibold text-gray-600 block mb-1">
-                  {newType === "LOAN" ? "Bank / Tashkilot nomi" : "Shaxsning ismi"}
+                  {newType === "LOAN" ? (newIsCreditCard ? "Karta / Bank nomi" : "Bank yoki Tashkilot nomi") : "Shaxsning ismi"}
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder={newType === "LOAN" ? "Masalan: Ipoteka bank" : "Masalan: Alisher"}
+                  placeholder={newType === "LOAN" ? (newIsCreditCard ? "Masalan: Anorbank Kredit Karta" : "Masalan: TBC Bank mikroqarz") : "Masalan: Alisher"}
                   value={newPerson}
                   onChange={(e) => setNewPerson(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
@@ -589,18 +757,39 @@ export default function DebtsPage() {
               {/* Summa */}
               <div>
                 <label className="text-[11px] font-semibold text-gray-600 block mb-1">
-                  Jami summa (so'm)
+                  {newIsCreditCard ? "Hozirgi sarflangan qarz (bo'sh bo'lsa 0)" : "Jami summa (so'm)"}
                 </label>
                 <input
                   type="number"
-                  required
-                  min="1"
+                  required={!newIsCreditCard}
+                  min="0"
                   placeholder="Masalan: 500000"
                   value={newAmount}
                   onChange={(e) => setNewAmount(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-semibold"
                 />
               </div>
+
+              {/* Bog'langan hisob (karta / hamyon) */}
+              {accounts.length > 0 && (
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Bog'langan hisob / karta
+                  </label>
+                  <select
+                    value={newAccountId}
+                    onChange={(e) => setNewAccountId(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                  >
+                    <option value="">Hisob tanlanmagan</option>
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({Number(acc.balance).toLocaleString()} so'm)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Qaytarish muddati */}
               <div>
@@ -697,6 +886,26 @@ export default function DebtsPage() {
                   className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-semibold"
                 />
               </div>
+
+              {accounts.length > 0 && (
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    To'lov amalga oshiriladigan hisob / karta
+                  </label>
+                  <select
+                    value={payAccountId}
+                    onChange={(e) => setPayAccountId(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                  >
+                    <option value="">Hisob tanlanmagan</option>
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({Number(acc.balance).toLocaleString()} so'm)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="text-[11px] font-semibold text-gray-600 block mb-1">

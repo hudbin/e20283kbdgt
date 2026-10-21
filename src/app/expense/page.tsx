@@ -9,6 +9,8 @@ export default function AddExpense() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [categories, setCategories] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [description, setDescription] = useState("");
@@ -20,10 +22,25 @@ export default function AddExpense() {
       const u = window.Telegram.WebApp.initDataUnsafe.user;
       setUser(u);
       loadCategories(u.id);
+      loadAccounts(u.id);
     } else {
       loadCategories(123456789);
+      loadAccounts(123456789);
     }
   }, []);
+
+  const loadAccounts = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/accounts?telegram_id=${telegramId}`);
+      const data = await res.json();
+      if (data.accounts) {
+        setAccounts(data.accounts);
+        if (data.accounts.length > 0) setAccountId(data.accounts[0].id);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const loadCategories = async (telegramId: number) => {
     try {
@@ -75,6 +92,7 @@ export default function AddExpense() {
           amount: Number(amount),
           type: "EXPENSE",
           category_id: categoryId || null,
+          account_id: accountId || null,
           description: description
         })
       });
@@ -147,6 +165,24 @@ export default function AddExpense() {
             </button>
           </div>
         </div>
+
+        {/* Hisob tanlash */}
+        {accounts.length > 0 && (
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col gap-2">
+            <label className="text-xs font-semibold text-gray-500">QAYSI HISOB / KARTADAN?</label>
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs outline-none focus:border-red-500 font-medium text-gray-800"
+            >
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name} ({Number(acc.balance).toLocaleString()} so'm) {acc.type === "CREDIT_CARD" ? "💳 Kredit" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col gap-2">
           <label className="text-xs font-semibold text-gray-500">IZOH (IXTIYORIY)</label>

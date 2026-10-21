@@ -21,6 +21,7 @@ interface Transaction {
   description: string;
   date: string;
   categories?: { name: string } | null;
+  accounts?: { name: string; type: string; color?: string } | null;
 }
 
 type PeriodType = "all" | "today" | "week" | "month" | "custom";
@@ -409,9 +410,16 @@ export default function AllTransactionsPage() {
                     {item.type === "INCOME" ? <ArrowDownIcon size={18} /> : <ArrowUpIcon size={18} />}
                   </div>
                   <div>
-                    <p className="font-semibold text-xs text-gray-900 leading-tight">
-                      {item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
-                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-semibold text-xs text-gray-900 leading-tight">
+                        {item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
+                      </p>
+                      {item.accounts?.name && (
+                        <span className="text-[9px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                          💳 {item.accounts.name}
+                        </span>
+                      )}
+                    </div>
                     {item.description && item.categories?.name && (
                       <p className="text-[11px] text-gray-500 line-clamp-1">{item.description}</p>
                     )}
