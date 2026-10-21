@@ -44,6 +44,8 @@ interface TelegramWebApp {
     notificationOccurred: (type: "error" | "success" | "warning") => void;
     selectionChanged: () => void;
   };
+  showConfirm?: (message: string, callback?: (confirmed: boolean) => void) => void;
+  showAlert?: (message: string, callback?: () => void) => void;
 }
 
 interface Window {

@@ -13,6 +13,7 @@ import {
   TrendingDown,
   PieChart,
   HandCoins,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -52,6 +53,7 @@ export default function Home() {
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -108,6 +110,47 @@ export default function Home() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleDeleteTransaction = async (id: string) => {
+    const confirmMessage = "Haqiqatan ham ushbu tranzaksiyani o'chirmoqchimisiz?";
+
+    const executeDelete = async () => {
+      try {
+        setDeletingId(id);
+        const telegramId = user?.id || 123456789;
+        const res = await fetch(`/api/transactions?id=${id}&telegram_id=${telegramId}`, {
+          method: "DELETE",
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          setTransactions((prev) => prev.filter((t) => t.id !== id));
+          if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+            window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+          }
+        } else {
+          alert(data.error || "O'chirishda xatolik yuz berdi");
+        }
+      } catch (err) {
+        console.error("O'chirishda xatolik:", err);
+        alert("Server bilan bog'lanishda xatolik yuz berdi");
+      } finally {
+        setDeletingId(null);
+      }
+    };
+
+    if (typeof window !== "undefined" && window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm(confirmMessage, (confirmed: boolean) => {
+        if (confirmed) {
+          executeDelete();
+        }
+      });
+    } else {
+      if (window.confirm(confirmMessage)) {
+        executeDelete();
+      }
     }
   };
 
@@ -555,14 +598,28 @@ export default function Home() {
                       </p>
                     </div>
                   </div>
-                  <p
-                    className={`font-bold text-xs shrink-0 ${
-                      item.type === "INCOME" ? "text-green-600" : "text-red-600"
-                    }`}
-                  >
-                    {item.type === "INCOME" ? "+" : "-"}
-                    {Number(item.amount).toLocaleString()} so'm
-                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <p
+                      className={`font-bold text-xs ${
+                        item.type === "INCOME" ? "text-green-600" : "text-red-600"
+                      }`}
+                    >
+                      {item.type === "INCOME" ? "+" : "-"}
+                      {Number(item.amount).toLocaleString()} so'm
+                    </p>
+                    <button
+                      onClick={() => handleDeleteTransaction(item.id)}
+                      disabled={deletingId === item.id}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition active:scale-90"
+                      title="Tranzaksiyani o'chirish"
+                    >
+                      {deletingId === item.id ? (
+                        <RefreshCw size={13} className="animate-spin text-red-500" />
+                      ) : (
+                        <Trash2 size={13} />
+                      )}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

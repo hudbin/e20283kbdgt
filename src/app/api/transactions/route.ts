@@ -53,3 +53,40 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
+
+export async function DELETE(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url)
+    let id = searchParams.get('id')
+    let telegramId = searchParams.get('telegram_id')
+
+    if (!id) {
+      try {
+        const body = await req.json()
+        id = body?.id
+        if (body?.telegram_id) {
+          telegramId = String(body.telegram_id)
+        }
+      } catch (_) {}
+    }
+
+    if (!id) {
+      return NextResponse.json({ error: 'Tranzaksiya id majburiy' }, { status: 400 })
+    }
+
+    let query = supabase.from('transactions').delete().eq('id', id)
+
+    if (telegramId) {
+      query = query.eq('telegram_id', Number(telegramId))
+    }
+
+    const { data, error } = await query.select()
+
+    if (error) throw error
+
+    return NextResponse.json({ success: true, message: "Tranzaksiya muvaffaqiyatli o'chirildi", deleted: data })
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+

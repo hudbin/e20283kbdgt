@@ -67,12 +67,48 @@ export async function POST(req: Request) {
           `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i> yoki ovozli xabar qoldiring.\n` +
           `🔹 <b>Hisobot fayllarini so'rash:</b> <i>"O'tgan oy hisobotini ber pdf va excel fayllarda"</i> deb yozing yoki ayting.\n` +
           `🔹 <b>Tahliliy savollar:</b> <i>"Ichimliklar uchun qancha sarfladim?"</i>, <i>"Menda qancha balans qoldi?"</i> deb so'rang.\n` +
+          `🔹 <b>Oxirgisini o'chirish:</b> <i>/undo</i> yoki <i>"oxirgisini o'chir"</i> deb yozing.\n` +
           `🔹 <b>Mini App:</b> To'liq grafiklar uchun pastdagi tugmani bosing.`,
           {
             inline_keyboard: [
               [{ text: "Mini App'ni ochish 🚀", web_app: { url: appUrl } }]
             ]
           }
+        )
+        return NextResponse.json({ ok: true })
+      }
+
+      const lowerText = (text || "").toLowerCase().trim()
+      if (
+        lowerText === '/undo' ||
+        lowerText === "oxirgisini o'chir" ||
+        lowerText === "oxirgi xarajatni o'chir" ||
+        lowerText === "oxirgi tranzaksiyani o'chir" ||
+        lowerText === "oxirgisini bekor qil"
+      ) {
+        const { data: lastTx } = await supabase
+          .from('transactions')
+          .select('id, amount, type, description, date, categories(name)')
+          .eq('telegram_id', from.id)
+          .order('date', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (!lastTx) {
+          await sendMessage(chat.id, "Sizda o'chirish uchun amaliyotlar topilmadi.")
+          return NextResponse.json({ ok: true })
+        }
+
+        await supabase.from('transactions').delete().eq('id', lastTx.id)
+        const categoryData = lastTx.categories as any
+        const catName = (Array.isArray(categoryData) ? categoryData[0]?.name : categoryData?.name) || (lastTx.type === 'EXPENSE' ? 'Xarajat' : 'Kirim')
+
+        await sendMessage(
+          chat.id,
+          `🗑 <b>Oxirgi tranzaksiya o'chirildi:</b>\n\n` +
+          `📌 <b>Tur:</b> ${lastTx.type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'}\n` +
+          `💰 <b>Summa:</b> ${Number(lastTx.amount).toLocaleString()} so'm\n` +
+          `📂 <b>Kategoriya:</b> ${catName}`
         )
         return NextResponse.json({ ok: true })
       }
@@ -350,13 +386,13 @@ export async function POST(req: Request) {
           if (newCat) categoryId = newCat.id
         }
 
-        await supabase.from('transactions').insert({
+        const { data: insertedTx } = await supabase.from('transactions').insert({
           telegram_id: fromId,
           category_id: categoryId,
           amount,
           type,
           description: "Telegram orqali kiritildi"
-        })
+        }).select('id').single()
 
         await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
           method: 'POST',
@@ -365,9 +401,36 @@ export async function POST(req: Request) {
             chat_id: chatId,
             message_id: messageId,
             text: `✅ <b>Muvaffaqiyatli saqlandi!</b>\n\n${type === 'EXPENSE' ? '📉 Chiqim' : '📈 Kirim'}: ${amount.toLocaleString()} so'm (${categoryName})`,
-            parse_mode: 'HTML'
+            parse_mode: 'HTML',
+            reply_markup: insertedTx?.id ? {
+              inline_keyboard: [
+                [{ text: "🗑 O'chirish", callback_data: `del_tx_${insertedTx.id}` }]
+              ]
+            } : undefined
           })
         })
+      } else if (data.startsWith('del_tx_')) {
+        const txId = data.replace('del_tx_', '')
+        const { error } = await supabase
+          .from('transactions')
+          .delete()
+          .eq('id', txId)
+          .eq('telegram_id', fromId)
+
+        if (error) {
+          await sendMessage(chatId, "❌ Tranzaksiyani o'chirishda xatolik yuz berdi.")
+        } else {
+          await fetch(`${TELEGRAM_API_URL}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              message_id: messageId,
+              text: "🗑 <b>Ushbu tranzaksiya o'chirildi!</b>",
+              parse_mode: 'HTML'
+            })
+          })
+        }
       } else if (data.startsWith('d_')) {
         const parts = data.split('_')
         const debtAction = parts[1] // LEND, BORROW, LOAN, REPAY, RECEIVE
