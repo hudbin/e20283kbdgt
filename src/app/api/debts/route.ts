@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { getAuthenticatedTelegramUser } from '@/lib/auth'
 
 export async function GET(req: Request) {
   try {
+    const auth = getAuthenticatedTelegramUser(req)
     const { searchParams } = new URL(req.url)
-    const telegramId = searchParams.get('telegram_id')
+    const telegramId = auth ? auth.telegramId : Number(searchParams.get('telegram_id'))
     const status = searchParams.get('status')
     const type = searchParams.get('type')
 

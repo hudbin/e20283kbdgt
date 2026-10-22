@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { getAuthenticatedTelegramUser } from '@/lib/auth'
 
 export async function GET(req: Request) {
   try {
+    const auth = getAuthenticatedTelegramUser(req)
     const { searchParams } = new URL(req.url)
-    const telegramId = searchParams.get('telegram_id')
+    const telegramId = auth ? auth.telegramId : (searchParams.get('telegram_id') ? Number(searchParams.get('telegram_id')) : null)
     const type = searchParams.get('type')
 
     let query = supabase.from('categories').select('*')

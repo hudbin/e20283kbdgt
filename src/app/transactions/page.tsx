@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowDownIcon,
   ArrowUpIcon,
+  ArrowLeftRight,
   Search,
   Calendar,
   Filter,
@@ -17,15 +18,18 @@ import {
 interface Transaction {
   id: string;
   amount: number;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "TRANSFER";
+  currency?: string;
+  exchange_rate?: number;
   description: string;
   date: string;
   categories?: { name: string } | null;
   accounts?: { name: string; type: string; color?: string } | null;
+  to_accounts?: { name: string; type: string; color?: string } | null;
 }
 
 type PeriodType = "all" | "today" | "week" | "month" | "custom";
-type FilterType = "ALL" | "INCOME" | "EXPENSE";
+type FilterType = "ALL" | "INCOME" | "EXPENSE" | "TRANSFER";
 
 export default function AllTransactionsPage() {
   const router = useRouter();
@@ -252,7 +256,7 @@ export default function AllTransactionsPage() {
           />
         </div>
 
-        {/* Type Toggle: Hammasi | Kirim | Chiqim */}
+        {/* Type Toggle: Hammasi | Kirim | Chiqim | O'tkazma */}
         <div className="flex bg-gray-200/80 p-1 rounded-xl text-xs font-semibold">
           <button
             onClick={() => setTypeFilter("ALL")}
@@ -272,7 +276,7 @@ export default function AllTransactionsPage() {
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            Chiqimlar
+            Chiqim
           </button>
           <button
             onClick={() => setTypeFilter("INCOME")}
@@ -282,7 +286,17 @@ export default function AllTransactionsPage() {
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            Kirimlar
+            Kirim
+          </button>
+          <button
+            onClick={() => setTypeFilter("TRANSFER")}
+            className={`flex-1 py-1.5 rounded-lg transition ${
+              typeFilter === "TRANSFER"
+                ? "bg-blue-600 text-white shadow-sm"
+                : "text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            O'tkazma
           </button>
         </div>
 
@@ -404,23 +418,33 @@ export default function AllTransactionsPage() {
                     className={`p-2 rounded-xl ${
                       item.type === "INCOME"
                         ? "bg-green-50 text-green-600"
+                        : item.type === "TRANSFER"
+                        ? "bg-blue-50 text-blue-600"
                         : "bg-red-50 text-red-600"
                     }`}
                   >
-                    {item.type === "INCOME" ? <ArrowDownIcon size={18} /> : <ArrowUpIcon size={18} />}
+                    {item.type === "INCOME" ? (
+                      <ArrowDownIcon size={18} />
+                    ) : item.type === "TRANSFER" ? (
+                      <ArrowLeftRight size={18} />
+                    ) : (
+                      <ArrowUpIcon size={18} />
+                    )}
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <p className="font-semibold text-xs text-gray-900 leading-tight">
-                        {item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
+                        {item.type === "TRANSFER"
+                          ? `O'tkazma: ${item.accounts?.name || 'Hisob'} ➡️ ${item.to_accounts?.name || 'Hisob'}`
+                          : item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
                       </p>
-                      {item.accounts?.name && (
+                      {item.type !== "TRANSFER" && item.accounts?.name && (
                         <span className="text-[9px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
                           💳 {item.accounts.name}
                         </span>
                       )}
                     </div>
-                    {item.description && item.categories?.name && (
+                    {item.description && item.type !== "TRANSFER" && item.categories?.name && (
                       <p className="text-[11px] text-gray-500 line-clamp-1">{item.description}</p>
                     )}
                     <p className="text-[10px] text-gray-400 mt-0.5">
@@ -435,14 +459,27 @@ export default function AllTransactionsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <p
-                    className={`font-bold text-xs ${
-                      item.type === "INCOME" ? "text-green-600" : "text-red-600"
-                    }`}
-                  >
-                    {item.type === "INCOME" ? "+" : "-"}
-                    {Number(item.amount).toLocaleString()} so'm
-                  </p>
+                  <div className="text-right">
+                    <p
+                      className={`font-bold text-xs ${
+                        item.type === "INCOME"
+                          ? "text-green-600"
+                          : item.type === "TRANSFER"
+                          ? "text-blue-600"
+                          : "text-red-600"
+                      }`}
+                    >
+                      {item.type === "INCOME" ? "+" : item.type === "TRANSFER" ? "⇄ " : "-"}
+                      {item.currency === "USD"
+                        ? `$${Number(item.amount).toLocaleString()}`
+                        : `${Number(item.amount).toLocaleString()} so'm`}
+                    </p>
+                    {item.currency && item.currency !== "UZS" && item.exchange_rate && (
+                      <p className="text-[9px] text-gray-400">
+                        ≈{Math.round(item.amount * item.exchange_rate).toLocaleString()} so'm
+                      </p>
+                    )}
+                  </div>
                   <button
                     onClick={() => handleDeleteTransaction(item.id)}
                     disabled={deletingId === item.id}

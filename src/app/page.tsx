@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  ArrowLeftRight,
   FileTextIcon,
   RefreshCw,
   Calendar,
@@ -20,24 +21,38 @@ import {
   Plus,
   X,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  Target,
+  SlidersHorizontal,
+  PiggyBank,
+  Repeat,
+  Users,
+  UserCheck,
+  UserPlus,
+  LogOut,
+  Copy,
+  Check
 } from "lucide-react";
 import Link from "next/link";
 
 interface Transaction {
   id: string;
   amount: number;
-  type: "INCOME" | "EXPENSE";
+  type: "INCOME" | "EXPENSE" | "TRANSFER";
   description: string;
   date: string;
+  currency?: string;
+  exchange_rate?: number;
   categories?: { name: string } | null;
-  accounts?: { name: string; type: string; color?: string } | null;
+  accounts?: { name: string; type: string; color?: string; currency?: string } | null;
+  to_accounts?: { name: string; type: string; color?: string; currency?: string } | null;
 }
 
 interface AccountItem {
   id: string;
   name: string;
   type: string;
+  currency?: string;
   balance: number;
   credit_limit?: number;
   grace_due_day?: number;
@@ -67,14 +82,78 @@ interface CreditCardItem {
   days_left: number;
 }
 
+interface BudgetItem {
+  id: string;
+  category_id: string | null;
+  category_name: string;
+  amount: number;
+  spent: number;
+  remaining: number;
+  percent: number;
+  status: "NORMAL" | "WARNING" | "EXCEEDED";
+  period: string;
+}
+
+interface GoalItem {
+  id: string;
+  name: string;
+  target_amount: number;
+  current_amount: number;
+  currency: string;
+  deadline?: string | null;
+  color?: string;
+  percent: number;
+  remaining: number;
+  days_left?: number | null;
+  monthly_needed?: number | null;
+  status: "ACTIVE" | "COMPLETED";
+}
+
+interface SubscriptionItem {
+  id: string;
+  name: string;
+  amount: number;
+  currency: string;
+  billing_day: number;
+  period: string;
+  days_left: number;
+  next_billing_date: string;
+  categories?: { name: string } | null;
+}
+
+interface SpaceMember {
+  telegram_id: number;
+  role: string;
+  joined_at: string;
+  name: string;
+  username?: string | null;
+  is_me?: boolean;
+}
+
+interface SpaceItem {
+  id: string;
+  name: string;
+  invite_code: string;
+  owner_id: number;
+  my_role: string;
+  members_count: number;
+  members: SpaceMember[];
+}
+
 interface AnalyticsSummary {
   net_worth: number;
+  net_worth_usd?: number;
+  exchange_rates?: { USD: number; EUR: number; RUB: number };
   total_assets: number;
   total_liabilities: number;
   total_receivables: number;
   accounts: AccountItem[];
   upcoming_payments: UpcomingPayment[];
   credit_cards: CreditCardItem[];
+  budgets?: BudgetItem[];
+  goals?: GoalItem[];
+  subscriptions?: SubscriptionItem[];
+  total_month_expense?: number;
 }
 
 type PeriodFilter = "today" | "week" | "month" | "custom";
@@ -110,10 +189,59 @@ export default function Home() {
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
   const [accName, setAccName] = useState("");
   const [accType, setAccType] = useState<"DEBIT_CARD" | "CREDIT_CARD" | "CASH">("DEBIT_CARD");
+  const [accCurrency, setAccCurrency] = useState<"UZS" | "USD">("UZS");
   const [accBalance, setAccBalance] = useState("");
   const [accLimit, setAccLimit] = useState("");
   const [accGraceDueDay, setAccGraceDueDay] = useState("20");
   const [submittingAcc, setSubmittingAcc] = useState(false);
+
+  // O'tkazma (Transfer) modal holati
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [transferFromId, setTransferFromId] = useState("");
+  const [transferToId, setTransferToId] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferDesc, setTransferDesc] = useState("");
+  const [submittingTransfer, setSubmittingTransfer] = useState(false);
+
+  // Byudjet (Budget) modal holati
+  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
+  const [budgetCategoryId, setBudgetCategoryId] = useState("");
+  const [budgetAmount, setBudgetAmount] = useState("");
+  const [submittingBudget, setSubmittingBudget] = useState(false);
+  const [availableCategories, setAvailableCategories] = useState<Array<{ id: string; name: string }>>([]);
+
+  // Jamg'arma Maqsadlari (Goals) modal holatlari
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
+  const [goalName, setGoalName] = useState("");
+  const [goalTarget, setGoalTarget] = useState("");
+  const [goalCurrency, setGoalCurrency] = useState<"UZS" | "USD">("UZS");
+  const [goalDeadline, setGoalDeadline] = useState("");
+  const [submittingGoal, setSubmittingGoal] = useState(false);
+
+  // Maqsadga pul qo'shish (Top-up) modal
+  const [isTopupModalOpen, setIsTopupModalOpen] = useState(false);
+  const [selectedGoal, setSelectedGoal] = useState<GoalItem | null>(null);
+  const [topupAmount, setTopupAmount] = useState("");
+  const [submittingTopup, setSubmittingTopup] = useState(false);
+
+  // Obuna (Subscription) modal holati
+  const [isSubModalOpen, setIsSubModalOpen] = useState(false);
+  const [subName, setSubName] = useState("");
+  const [subAmount, setSubAmount] = useState("");
+  const [subCurrency, setSubCurrency] = useState<"UZS" | "USD">("UZS");
+  const [subBillingDay, setSubBillingDay] = useState("1");
+  const [subCategoryId, setSubCategoryId] = useState("");
+  const [submittingSub, setSubmittingSub] = useState(false);
+
+  // Oilaviy / Jamoaviy bo'shliqlar (Spaces) holatlari
+  const [spaces, setSpaces] = useState<SpaceItem[]>([]);
+  const [selectedSpaceId, setSelectedSpaceId] = useState<string>("personal"); // "personal" yoki space UUID
+  const [isSpaceModalOpen, setIsSpaceModalOpen] = useState(false);
+  const [spaceModalTab, setSpaceModalTab] = useState<"list" | "create" | "join">("list");
+  const [newSpaceName, setNewSpaceName] = useState("");
+  const [joinInviteCode, setJoinInviteCode] = useState("");
+  const [submittingSpace, setSubmittingSpace] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -137,14 +265,55 @@ export default function Home() {
     }
   }, []);
 
+  // Telegram initData sarlavhasi bilan xavfsiz so'rov yuborish
+  const getAuthHeaders = () => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (typeof window !== "undefined" && window.Telegram?.WebApp?.initData) {
+      headers["x-telegram-init-data"] = window.Telegram.WebApp.initData;
+    }
+    return headers;
+  };
+
   const loadAllData = (telegramId: number) => {
-    fetchTransactions(telegramId);
+    fetchTransactions(telegramId, selectedSpaceId);
     fetchSummary(telegramId);
+    fetchCategories(telegramId);
+    fetchSpaces(telegramId);
+  };
+
+  const fetchSpaces = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/spaces?telegram_id=${telegramId}`, {
+        headers: getAuthHeaders()
+      });
+      const data = await res.json();
+      if (data && data.spaces) {
+        setSpaces(data.spaces);
+      }
+    } catch (e) {
+      console.error("Spaces yuklashda xatolik:", e);
+    }
+  };
+
+  const fetchCategories = async (telegramId: number) => {
+    try {
+      const res = await fetch(`/api/categories?telegram_id=${telegramId}`, {
+        headers: getAuthHeaders()
+      });
+      const data = await res.json();
+      if (data && data.categories) {
+        setAvailableCategories(data.categories.filter((c: any) => c.type === "EXPENSE"));
+      }
+    } catch (_) {}
   };
 
   const fetchSummary = async (telegramId: number) => {
     try {
-      const res = await fetch(`/api/analytics/summary?telegram_id=${telegramId}`);
+      const res = await fetch(`/api/analytics/summary?telegram_id=${telegramId}`, {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       if (data && !data.error) {
         setSummary(data);
@@ -154,10 +323,15 @@ export default function Home() {
     }
   };
 
-  const fetchTransactions = async (telegramId: number) => {
+  const fetchTransactions = async (telegramId: number, spaceId: string = selectedSpaceId) => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/transactions?telegram_id=${telegramId}`);
+      const url = spaceId && spaceId !== "personal"
+        ? `/api/transactions?telegram_id=${telegramId}&space_id=${spaceId}`
+        : `/api/transactions?telegram_id=${telegramId}`;
+      const res = await fetch(url, {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       if (data.transactions) {
         setTransactions(data.transactions);
@@ -183,6 +357,7 @@ export default function Home() {
           telegram_id: telegramId,
           name: accName.trim(),
           type: accType,
+          currency: accCurrency,
           balance: Number(accBalance) || 0,
           credit_limit: Number(accLimit) || 0,
           grace_due_day: accGraceDueDay ? Number(accGraceDueDay) : null
@@ -200,6 +375,352 @@ export default function Home() {
       console.error("Hisob qo'shishda xatolik:", err);
     } finally {
       setSubmittingAcc(false);
+    }
+  };
+
+  const handleCreateTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferFromId || !transferToId || !transferAmount) return;
+    if (transferFromId === transferToId) {
+      alert("Chiqim va kirim hisoblari bir xil bo'lishi mumkin emas!");
+      return;
+    }
+
+    try {
+      setSubmittingTransfer(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          type: "TRANSFER",
+          account_id: transferFromId,
+          to_account_id: transferToId,
+          amount: Number(transferAmount),
+          description: transferDesc.trim() || "Hisoblararo o'tkazma"
+        })
+      });
+      const data = await res.json();
+      if (data.transaction) {
+        setIsTransferModalOpen(false);
+        setTransferAmount("");
+        setTransferDesc("");
+        loadAllData(telegramId);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "O'tkazishda xatolik yuz berdi");
+      }
+    } catch (err) {
+      console.error("O'tkazmada xatolik:", err);
+    } finally {
+      setSubmittingTransfer(false);
+    }
+  };
+
+  const handleSaveBudget = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!budgetAmount) return;
+
+    try {
+      setSubmittingBudget(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/budgets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          category_id: budgetCategoryId || null,
+          amount: Number(budgetAmount),
+          period: "MONTHLY"
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsBudgetModalOpen(false);
+        setBudgetAmount("");
+        setBudgetCategoryId("");
+        fetchSummary(telegramId);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Byudjet saqlashda xatolik");
+      }
+    } catch (err) {
+      console.error("Byudjet saqlashda xatolik:", err);
+    } finally {
+      setSubmittingBudget(false);
+    }
+  };
+
+  const handleDeleteBudget = async (budgetId: string) => {
+    if (!confirm("Ushbu byudjet limitini o'chirmoqchimisiz?")) return;
+    try {
+      const telegramId = user?.id || 123456789;
+      const res = await fetch(`/api/budgets?id=${budgetId}&telegram_id=${telegramId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchSummary(telegramId);
+      }
+    } catch (err) {
+      console.error("Byudjetni o'chirishda xatolik:", err);
+    }
+  };
+
+  const handleCreateGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!goalName.trim() || !goalTarget) return;
+
+    try {
+      setSubmittingGoal(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          name: goalName.trim(),
+          target_amount: Number(goalTarget),
+          currency: goalCurrency,
+          deadline: goalDeadline ? new Date(goalDeadline).toISOString() : null
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsGoalModalOpen(false);
+        setGoalName("");
+        setGoalTarget("");
+        setGoalDeadline("");
+        fetchSummary(telegramId);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Maqsad yaratishda xatolik");
+      }
+    } catch (err) {
+      console.error("Maqsad yaratishda xatolik:", err);
+    } finally {
+      setSubmittingGoal(false);
+    }
+  };
+
+  const handleDepositGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedGoal || !topupAmount) return;
+
+    try {
+      setSubmittingTopup(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          goal_id: selectedGoal.id,
+          action: "DEPOSIT",
+          amount: Number(topupAmount)
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsTopupModalOpen(false);
+        setSelectedGoal(null);
+        setTopupAmount("");
+        fetchSummary(telegramId);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Mablag' qo'shishda xatolik");
+      }
+    } catch (err) {
+      console.error("Mablag' qo'shishda xatolik:", err);
+    } finally {
+      setSubmittingTopup(false);
+    }
+  };
+
+  const handleDeleteGoal = async (goalId: string) => {
+    if (!confirm("Ushbu maqsadni o'chirmoqchimisiz?")) return;
+    try {
+      const telegramId = user?.id || 123456789;
+      const res = await fetch(`/api/goals?id=${goalId}&telegram_id=${telegramId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchSummary(telegramId);
+      }
+    } catch (err) {
+      console.error("Maqsadni o'chirishda xatolik:", err);
+    }
+  };
+
+  const handleCreateSub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subName.trim() || !subAmount || !subBillingDay) return;
+
+    try {
+      setSubmittingSub(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          name: subName.trim(),
+          amount: Number(subAmount),
+          currency: subCurrency,
+          billing_day: Number(subBillingDay),
+          category_id: subCategoryId || null
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsSubModalOpen(false);
+        setSubName("");
+        setSubAmount("");
+        setSubBillingDay("1");
+        setSubCategoryId("");
+        fetchSummary(telegramId);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Obuna qo'shishda xatolik");
+      }
+    } catch (err) {
+      console.error("Obuna qo'shishda xatolik:", err);
+    } finally {
+      setSubmittingSub(false);
+    }
+  };
+
+  const handleDeleteSub = async (subId: string) => {
+    if (!confirm("Ushbu obunani o'chirmoqchimisiz?")) return;
+    try {
+      const telegramId = user?.id || 123456789;
+      const res = await fetch(`/api/subscriptions?id=${subId}&telegram_id=${telegramId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchSummary(telegramId);
+      }
+    } catch (err) {
+      console.error("Obunani o'chirishda xatolik:", err);
+    }
+  };
+
+  // Oilaviy guruh boshqaruvi funksiyalari
+  const handleCreateSpace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSpaceName.trim()) return;
+
+    try {
+      setSubmittingSpace(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/spaces", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          action: "CREATE",
+          name: newSpaceName.trim()
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.space) {
+        setNewSpaceName("");
+        setSpaceModalTab("list");
+        fetchSpaces(telegramId);
+        setSelectedSpaceId(data.space.id);
+        fetchTransactions(telegramId, data.space.id);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Guruh yaratishda xatolik");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmittingSpace(false);
+    }
+  };
+
+  const handleJoinSpace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!joinInviteCode.trim()) return;
+
+    try {
+      setSubmittingSpace(true);
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/spaces", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          action: "JOIN",
+          invite_code: joinInviteCode.trim()
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.space) {
+        setJoinInviteCode("");
+        setSpaceModalTab("list");
+        fetchSpaces(telegramId);
+        setSelectedSpaceId(data.space.id);
+        fetchTransactions(telegramId, data.space.id);
+        if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+          window.Telegram.WebApp.HapticFeedback.notificationOccurred("success");
+        }
+      } else {
+        alert(data.error || "Guruhga qo'shilishda xatolik");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmittingSpace(false);
+    }
+  };
+
+  const handleLeaveSpace = async (spaceId: string) => {
+    if (!confirm("Haqiqatan ham ushbu oilaviy guruhdan chiqmoqchimisiz?")) return;
+    try {
+      const telegramId = user?.id || 123456789;
+      const res = await fetch("/api/spaces", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          telegram_id: telegramId,
+          action: "LEAVE",
+          space_id: spaceId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSelectedSpaceId("personal");
+        fetchSpaces(telegramId);
+        fetchTransactions(telegramId, "personal");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSelectSpace = (spaceId: string) => {
+    setSelectedSpaceId(spaceId);
+    const telegramId = user?.id || 123456789;
+    fetchTransactions(telegramId, spaceId);
+    if (typeof window !== "undefined" && window.Telegram?.WebApp?.HapticFeedback) {
+      window.Telegram.WebApp.HapticFeedback.selectionChanged();
     }
   };
 
@@ -386,8 +907,29 @@ export default function Home() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Bo'shliq (Space) almashtirish tugmasi */}
           <button
-            onClick={() => user?.id && fetchTransactions(user.id)}
+            onClick={() => {
+              setSpaceModalTab("list");
+              setIsSpaceModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-xl bg-blue-50 text-blue-700 border border-blue-200/80 hover:bg-blue-100 transition active:scale-95"
+          >
+            <Users size={14} />
+            <span>
+              {selectedSpaceId === "personal"
+                ? "Shaxsiy"
+                : spaces.find((s) => s.id === selectedSpaceId)?.name || "Guruh"}
+            </span>
+          </button>
+
+          <button
+            onClick={() => {
+              const tgId = user?.id || 123456789;
+              fetchTransactions(tgId, selectedSpaceId);
+              fetchSummary(tgId);
+              fetchSpaces(tgId);
+            }}
             className="p-2 text-gray-500 hover:text-gray-700 active:scale-95 transition"
             title="Yangilash"
           >
@@ -417,7 +959,19 @@ export default function Home() {
             <h2 className="text-2xl font-black tracking-tight">
               {summary ? `${summary.net_worth.toLocaleString()} so'm` : `${allTimeBalance.toLocaleString()} so'm`}
             </h2>
-            <p className="text-[10px] text-gray-400 mt-0.5">
+            <div className="flex items-center gap-2 mt-1">
+              {summary?.net_worth_usd !== undefined && (
+                <span className="text-[11px] font-semibold text-emerald-400 bg-white/10 px-2 py-0.5 rounded-lg">
+                  ≈ ${summary.net_worth_usd.toLocaleString()} USD
+                </span>
+              )}
+              {summary?.exchange_rates?.USD && (
+                <span className="text-[10px] text-gray-400">
+                  CBU: 1$ = {Number(summary.exchange_rates.USD).toLocaleString()} so'm
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1">
               Aktivlar (kartalar/naqd) minus barcha kredit va majburiyatlar
             </p>
           </div>
@@ -533,7 +1087,9 @@ export default function Home() {
                   <div>
                     <span className="text-[10px] text-gray-400 block">Balans:</span>
                     <span className="font-black text-xs text-gray-900">
-                      {Number(acc.balance).toLocaleString()} so'm
+                      {acc.currency === "USD"
+                        ? `$${Number(acc.balance).toLocaleString()}`
+                        : `${Number(acc.balance).toLocaleString()} so'm`}
                     </span>
                   </div>
                   {acc.type === "CREDIT_CARD" && acc.grace_due_day && (
@@ -659,26 +1215,281 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Action Buttons: Kirim va Chiqim qo'shish */}
-        <div className="grid grid-cols-2 gap-3">
+        {/* Action Buttons: Kirim, Chiqim va O'tkazma */}
+        <div className="grid grid-cols-3 gap-2">
           <Link
             href="/income"
-            className="bg-green-600 hover:bg-green-700 text-white p-3.5 rounded-2xl flex items-center justify-center gap-2.5 shadow-xs active:scale-95 transition"
+            className="bg-green-600 hover:bg-green-700 text-white p-3 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-xs active:scale-95 transition"
           >
-            <div className="bg-white/20 p-1.5 rounded-xl">
-              <ArrowDownIcon size={18} />
-            </div>
-            <span className="font-semibold text-xs">Kirim qo'shish</span>
+            <ArrowDownIcon size={18} />
+            <span className="font-semibold text-[11px]">Kirim</span>
           </Link>
           <Link
             href="/expense"
-            className="bg-red-600 hover:bg-red-700 text-white p-3.5 rounded-2xl flex items-center justify-center gap-2.5 shadow-xs active:scale-95 transition"
+            className="bg-red-600 hover:bg-red-700 text-white p-3 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-xs active:scale-95 transition"
           >
-            <div className="bg-white/20 p-1.5 rounded-xl">
-              <ArrowUpIcon size={18} />
-            </div>
-            <span className="font-semibold text-xs">Chiqim qo'shish</span>
+            <ArrowUpIcon size={18} />
+            <span className="font-semibold text-[11px]">Chiqim</span>
           </Link>
+          <button
+            type="button"
+            onClick={() => {
+              if (summary?.accounts && summary.accounts.length >= 2) {
+                setTransferFromId(summary.accounts[0].id);
+                setTransferToId(summary.accounts[1].id);
+              }
+              setIsTransferModalOpen(true);
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-2xl flex flex-col items-center justify-center gap-1 shadow-xs active:scale-95 transition"
+          >
+            <ArrowLeftRight size={18} />
+            <span className="font-semibold text-[11px]">O'tkazma</span>
+          </button>
+        </div>
+
+        {/* OYLIK BYUDJETLAR VA LIMITLAR NAZORATI */}
+        <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                <Target size={16} />
+              </div>
+              <div>
+                <h3 className="font-bold text-xs text-gray-900">Oylik Byudjetlar nazorati</h3>
+                <p className="text-[10px] text-gray-400">Har bir kategoriya bo'yicha limitlar</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsBudgetModalOpen(true)}
+              className="text-[11px] font-semibold text-amber-600 flex items-center gap-1 active:scale-95 transition"
+            >
+              <Plus size={13} /> Limit qo'yish
+            </button>
+          </div>
+
+          {summary?.budgets && summary.budgets.length > 0 ? (
+            <div className="flex flex-col gap-3 pt-1">
+              {summary.budgets.map((b) => (
+                <div key={b.id} className="flex flex-col gap-1.5 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-gray-900">{b.category_name}</span>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                        b.status === 'EXCEEDED'
+                          ? 'bg-rose-100 text-rose-700'
+                          : b.status === 'WARNING'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {b.percent}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-right">
+                        <span className="font-extrabold text-[11px] text-gray-900 block">
+                          {b.spent.toLocaleString()} / {b.amount.toLocaleString()} so'm
+                        </span>
+                        <span className={`text-[10px] font-medium ${b.remaining >= 0 ? 'text-gray-400' : 'text-rose-600'}`}>
+                          {b.remaining >= 0 ? `Qoldi: ${b.remaining.toLocaleString()} so'm` : `Oshdi: ${Math.abs(b.remaining).toLocaleString()} so'm`}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteBudget(b.id)}
+                        className="text-gray-300 hover:text-rose-500 p-1 transition"
+                        title="Byudjetni o'chirish"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="w-full bg-gray-200/80 rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-2 rounded-full transition-all duration-500 ${
+                        b.status === 'EXCEEDED'
+                          ? 'bg-rose-500'
+                          : b.status === 'WARNING'
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(3, b.percent))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 text-center bg-gray-50/60 rounded-xl border border-dashed border-gray-200 flex flex-col items-center gap-1.5">
+              <SlidersHorizontal size={20} className="text-gray-400" />
+              <p className="text-xs text-gray-600 font-medium">Hali byudjet limitlari belgilanmagan</p>
+              <p className="text-[10px] text-gray-400">
+                Kafelar yoki boshqa xarajatlarga oylik limit qo'yib, ortiqcha sarfning oldini oling.
+              </p>
+              <button
+                onClick={() => setIsBudgetModalOpen(true)}
+                className="mt-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg active:scale-95 transition shadow-xs"
+              >
+                + Oylik limit belgilash
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* JAMG'ARMA MAQSADLARI VIDJETI (GOALS / PIGGY BANK) */}
+        <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                <PiggyBank size={16} />
+              </div>
+              <div>
+                <h3 className="font-bold text-xs text-gray-900">Jamg'arma Maqsadlari</h3>
+                <p className="text-[10px] text-gray-400">Orzular va maqsadlar uchun jamg'arma</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsGoalModalOpen(true)}
+              className="text-[11px] font-semibold text-amber-600 flex items-center gap-1 active:scale-95 transition"
+            >
+              <Plus size={13} /> Yangi maqsad
+            </button>
+          </div>
+
+          {summary?.goals && summary.goals.length > 0 ? (
+            <div className="flex flex-col gap-3 pt-1">
+              {summary.goals.map((g) => (
+                <div key={g.id} className="p-3 bg-gradient-to-r from-amber-50/40 to-orange-50/30 rounded-xl border border-amber-100/70 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-gray-900">{g.name}</span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          g.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {g.percent}%
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {g.currency === 'USD' ? `$${g.current_amount.toLocaleString()}` : `${g.current_amount.toLocaleString()} so'm`} / {g.currency === 'USD' ? `$${g.target_amount.toLocaleString()}` : `${g.target_amount.toLocaleString()} so'm`}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setSelectedGoal(g);
+                          setIsTopupModalOpen(true);
+                        }}
+                        className="bg-amber-500 hover:bg-amber-600 active:scale-95 text-white text-[11px] font-semibold px-2.5 py-1 rounded-lg transition shadow-2xs"
+                      >
+                        + Qo'shish
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGoal(g.id)}
+                        className="text-gray-300 hover:text-rose-500 p-1 transition"
+                        title="Maqsadni o'chirish"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="w-full bg-gray-200/80 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-2 rounded-full bg-amber-500 transition-all duration-500"
+                      style={{ width: `${Math.min(100, Math.max(3, g.percent))}%` }}
+                    />
+                  </div>
+
+                  {(g.days_left !== undefined && g.days_left !== null) && (
+                    <div className="flex items-center justify-between text-[10px] text-gray-500 pt-0.5">
+                      <span>📅 {g.days_left > 0 ? `${g.days_left} kun qoldi` : "Muddat yetdi"}</span>
+                      {g.monthly_needed && g.days_left > 0 && (
+                        <span className="font-medium text-amber-700">Oyiga: ~{g.currency === 'USD' ? `$${g.monthly_needed.toLocaleString()}` : `${g.monthly_needed.toLocaleString()} so'm`}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 text-center bg-gray-50/60 rounded-xl border border-dashed border-gray-200 flex flex-col items-center gap-1">
+              <PiggyBank size={20} className="text-gray-400" />
+              <p className="text-xs text-gray-600 font-medium">Hali jamg'arma maqsadi ochilmagan</p>
+              <p className="text-[10px] text-gray-400">
+                Mashina, sayohat yoki favqulodda jamg'arma uchun maqsad belgilang.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* MUNTAZAM TO'LOVLAR VA OBUNALAR VIDJETI (SUBSCRIPTIONS) */}
+        <div className="bg-white rounded-2xl p-4 shadow-xs border border-gray-100 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-violet-50 text-violet-600 rounded-lg">
+                <Repeat size={16} />
+              </div>
+              <div>
+                <h3 className="font-bold text-xs text-gray-900">Muntazam to'lovlar & Obunalar</h3>
+                <p className="text-[10px] text-gray-400">Kommunal, internet, ijara va obunalar</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsSubModalOpen(true)}
+              className="text-[11px] font-semibold text-violet-600 flex items-center gap-1 active:scale-95 transition"
+            >
+              <Plus size={13} /> Yangi obuna
+            </button>
+          </div>
+
+          {summary?.subscriptions && summary.subscriptions.length > 0 ? (
+            <div className="flex flex-col gap-2 pt-1">
+              {summary.subscriptions.map((s) => (
+                <div key={s.id} className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 bg-violet-100 text-violet-600 rounded-lg flex items-center justify-center font-bold text-xs">
+                      {s.billing_day}
+                    </div>
+                    <div>
+                      <p className="font-bold text-gray-900 text-[11px] leading-tight">{s.name}</p>
+                      <p className="text-[10px] text-gray-400">Har oyning {s.billing_day}-kuni</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className="font-extrabold text-xs text-gray-900">
+                        {s.currency === 'USD' ? `$${s.amount.toLocaleString()}` : `${s.amount.toLocaleString()} so'm`}
+                      </p>
+                      <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                        s.days_left <= 3 ? "bg-rose-100 text-rose-700" : "bg-violet-100 text-violet-700"
+                      }`}>
+                        {s.days_left <= 0 ? "Bugun to'lov!" : `${s.days_left} kun qoldi`}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteSub(s.id)}
+                      className="text-gray-300 hover:text-rose-500 p-1 transition"
+                      title="Obunani o'chirish"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 text-center bg-gray-50/60 rounded-xl border border-dashed border-gray-200 flex flex-col items-center gap-1">
+              <Repeat size={20} className="text-gray-400" />
+              <p className="text-xs text-gray-600 font-medium">Obunalar mavjud emas</p>
+              <p className="text-[10px] text-gray-400">
+                Internet, uy ijarasi yoki Telegram Premium obunalaringizni kiriting.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* QARZLAR VA KREDITLAR VIDJETI */}
@@ -818,16 +1629,26 @@ export default function Home() {
                       className={`p-2 rounded-xl ${
                         item.type === "INCOME"
                           ? "bg-green-50 text-green-600"
+                          : item.type === "TRANSFER"
+                          ? "bg-blue-50 text-blue-600"
                           : "bg-red-50 text-red-600"
                       }`}
                     >
-                      {item.type === "INCOME" ? <ArrowDownIcon size={16} /> : <ArrowUpIcon size={16} />}
+                      {item.type === "INCOME" ? (
+                        <ArrowDownIcon size={16} />
+                      ) : item.type === "TRANSFER" ? (
+                        <ArrowLeftRight size={16} />
+                      ) : (
+                        <ArrowUpIcon size={16} />
+                      )}
                     </div>
                     <div>
                       <p className="font-semibold text-xs text-gray-900 leading-tight">
-                        {item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
+                        {item.type === "TRANSFER"
+                          ? `O'tkazma: ${item.accounts?.name || 'Hisob'} ➡️ ${item.to_accounts?.name || 'Hisob'}`
+                          : item.categories?.name || item.description || (item.type === "INCOME" ? "Kirim" : "Chiqim")}
                       </p>
-                      {item.description && item.categories?.name && (
+                      {item.description && item.type !== "TRANSFER" && item.categories?.name && (
                         <p className="text-[10px] text-gray-500 line-clamp-1">{item.description}</p>
                       )}
                       <p className="text-[10px] text-gray-400 mt-0.5">
@@ -841,14 +1662,27 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <p
-                      className={`font-bold text-xs ${
-                        item.type === "INCOME" ? "text-green-600" : "text-red-600"
-                      }`}
-                    >
-                      {item.type === "INCOME" ? "+" : "-"}
-                      {Number(item.amount).toLocaleString()} so'm
-                    </p>
+                    <div>
+                      <p
+                        className={`font-bold text-xs text-right ${
+                          item.type === "INCOME"
+                            ? "text-green-600"
+                            : item.type === "TRANSFER"
+                            ? "text-blue-600"
+                            : "text-red-600"
+                        }`}
+                      >
+                        {item.type === "INCOME" ? "+" : item.type === "TRANSFER" ? "⇄ " : "-"}
+                        {item.currency === "USD"
+                          ? `$${Number(item.amount).toLocaleString()}`
+                          : `${Number(item.amount).toLocaleString()} so'm`}
+                      </p>
+                      {item.currency && item.currency !== "UZS" && item.exchange_rate && (
+                        <p className="text-[9px] text-gray-400 text-right">
+                          ≈{Math.round(item.amount * item.exchange_rate).toLocaleString()} so'm
+                        </p>
+                      )}
+                    </div>
                     <button
                       onClick={() => handleDeleteTransaction(item.id)}
                       disabled={deletingId === item.id}
@@ -953,6 +1787,36 @@ export default function Home() {
 
               <div>
                 <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Valyuta
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAccCurrency("UZS")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      accCurrency === "UZS"
+                        ? "bg-gray-900 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    UZS (So'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccCurrency("USD")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      accCurrency === "USD"
+                        ? "bg-emerald-600 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    USD (Dollar $)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
                   Hisob / Karta nomi
                 </label>
                 <input
@@ -1039,6 +1903,689 @@ export default function Home() {
                 {submittingAcc ? "Saqlanmoqda..." : "Hisobni saqlash"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* HISOBLARARO O'TKAZMA (TRANSFER) MODAL OYNASI */}
+      {isTransferModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                  <ArrowLeftRight size={16} />
+                </div>
+                <h3 className="font-bold text-sm text-gray-900">Hisoblararo o'tkazma</h3>
+              </div>
+              <button
+                onClick={() => setIsTransferModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateTransfer} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  📤 Chiqim hisobi (Qayerdan)
+                </label>
+                <select
+                  required
+                  value={transferFromId}
+                  onChange={(e) => setTransferFromId(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-medium"
+                >
+                  <option value="">Hisobni tanlang</option>
+                  {summary?.accounts?.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name} ({Number(acc.balance).toLocaleString()} so'm)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  📥 Kirim hisobi (Qayerga)
+                </label>
+                <select
+                  required
+                  value={transferToId}
+                  onChange={(e) => setTransferToId(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-medium"
+                >
+                  <option value="">Hisobni tanlang</option>
+                  {summary?.accounts?.map((acc) => (
+                    <option key={acc.id} value={acc.id} disabled={acc.id === transferFromId}>
+                      {acc.name} ({Number(acc.balance).toLocaleString()} so'm)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  O'tkazma summasi (so'm)
+                </label>
+                <input
+                  type="number"
+                  required
+                  placeholder="Masalan: 200000"
+                  value={transferAmount}
+                  onChange={(e) => setTransferAmount(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Izoh (ixtiyoriy)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Masalan: Bankomatdan naqd yechish"
+                  value={transferDesc}
+                  onChange={(e) => setTransferDesc(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingTransfer}
+                className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingTransfer ? "O'tkazilmoqda..." : "O'tkazmani tasdiqlash"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* BYUDJET LIMITI BELGILASH (BUDGET MODAL) */}
+      {isBudgetModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                  <Target size={16} />
+                </div>
+                <h3 className="font-bold text-sm text-gray-900">Oylik Byudjet chegarasi</h3>
+              </div>
+              <button
+                onClick={() => setIsBudgetModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBudget} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Kategoriya
+                </label>
+                <select
+                  value={budgetCategoryId}
+                  onChange={(e) => setBudgetCategoryId(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500 font-medium"
+                >
+                  <option value="">🎯 Umumiy oylik byudjet (Barcha xarajatlar)</option>
+                  {availableCategories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      📁 {c.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Muayyan bitta kategoriya yoki barcha chiqimlar uchun limit tanlang.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Oylik limit summasi (so'm)
+                </label>
+                <input
+                  type="number"
+                  required
+                  placeholder="Masalan: 1500000"
+                  value={budgetAmount}
+                  onChange={(e) => setBudgetAmount(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500 font-semibold"
+                />
+              </div>
+
+              <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200 text-amber-800 text-[10px]">
+                💡 <b>Aqlli ogohlantirish:</b> Xarajat ushbu limitning 80% yoki 100% idan oshganda, Telegram bot sizni avtomatik ogohlantiradi.
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingBudget}
+                className="mt-2 w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingBudget ? "Saqlanmoqda..." : "Byudjet limitini saqlash"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* YANGI MAQSAD YARATISH (GOAL MODAL) */}
+      {isGoalModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                  <PiggyBank size={16} />
+                </div>
+                <h3 className="font-bold text-sm text-gray-900">Yangi Jamg'arma maqsadi</h3>
+              </div>
+              <button
+                onClick={() => setIsGoalModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateGoal} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Maqsad nomi
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Masalan: Yangi mashina yoki Umra safari"
+                  value={goalName}
+                  onChange={(e) => setGoalName(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Valyuta
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGoalCurrency("UZS")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      goalCurrency === "UZS"
+                        ? "bg-gray-900 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    UZS (So'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGoalCurrency("USD")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      goalCurrency === "USD"
+                        ? "bg-emerald-600 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    USD (Dollar $)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Maqsad summasi ({goalCurrency === "USD" ? "$" : "so'm"})
+                </label>
+                <input
+                  type="number"
+                  required
+                  placeholder={goalCurrency === "USD" ? "Masalan: 5000" : "Masalan: 50000000"}
+                  value={goalTarget}
+                  onChange={(e) => setGoalTarget(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Rejalashtirilgan sana (Deadline - ixtiyoriy)
+                </label>
+                <input
+                  type="date"
+                  value={goalDeadline}
+                  onChange={(e) => setGoalDeadline(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingGoal}
+                className="mt-2 w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingGoal ? "Saqlanmoqda..." : "Maqsadni yaratish"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MAQSADGA PUL QO'SHISH (TOP-UP MODAL) */}
+      {isTopupModalOpen && selectedGoal && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+                  <PiggyBank size={16} />
+                </div>
+                <h3 className="font-bold text-sm text-gray-900">"{selectedGoal.name}" ga mablag' qo'shish</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setIsTopupModalOpen(false);
+                  setSelectedGoal(null);
+                }}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleDepositGoal} className="flex flex-col gap-3 text-xs">
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs">
+                <p className="font-semibold">{selectedGoal.name}</p>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  Hozirgi qoldiq: <b>{selectedGoal.currency === 'USD' ? `$${selectedGoal.current_amount.toLocaleString()}` : `${selectedGoal.current_amount.toLocaleString()} so'm`}</b> / {selectedGoal.currency === 'USD' ? `$${selectedGoal.target_amount.toLocaleString()}` : `${selectedGoal.target_amount.toLocaleString()} so'm`} ({selectedGoal.percent}%)
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Qo'shiladigan summa ({selectedGoal.currency === 'USD' ? "$" : "so'm"})
+                </label>
+                <input
+                  type="number"
+                  required
+                  placeholder="Summani kiriting"
+                  value={topupAmount}
+                  onChange={(e) => setTopupAmount(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-500 font-bold"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingTopup}
+                className="mt-2 w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingTopup ? "Qo'shilmoqda..." : "Mablag'ni qo'shish"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* YANGI OBUNA QO'SHISH (SUBSCRIPTION MODAL) */}
+      {isSubModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-violet-50 text-violet-600 rounded-lg">
+                  <Repeat size={16} />
+                </div>
+                <h3 className="font-bold text-sm text-gray-900">Yangi Obuna yoki To'lov</h3>
+              </div>
+              <button
+                onClick={() => setIsSubModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSub} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  To'lov / Obuna nomi
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Masalan: Uy ijarasi, Wi-Fi, Telegram Premium"
+                  value={subName}
+                  onChange={(e) => setSubName(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-violet-500 font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Summa
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="Masalan: 150000"
+                    value={subAmount}
+                    onChange={(e) => setSubAmount(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-violet-500 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Har oyning qaysi kuni
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    required
+                    placeholder="1-31"
+                    value={subBillingDay}
+                    onChange={(e) => setSubBillingDay(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-violet-500 font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Valyuta
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSubCurrency("UZS")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      subCurrency === "UZS"
+                        ? "bg-gray-900 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    UZS (So'm)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubCurrency("USD")}
+                    className={`py-2 rounded-xl text-center font-medium transition ${
+                      subCurrency === "USD"
+                        ? "bg-emerald-600 text-white font-semibold"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    USD (Dollar $)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                  Kategoriya (ixtiyoriy)
+                </label>
+                <select
+                  value={subCategoryId}
+                  onChange={(e) => setSubCategoryId(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-violet-500 font-medium"
+                >
+                  <option value="">Kategoriya tanlang</option>
+                  {availableCategories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingSub}
+                className="mt-2 w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+              >
+                {submittingSub ? "Saqlanmoqda..." : "Obunani saqlash"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. OILAVIY GURUH (SPACES) MODAL OYNASI */}
+      {isSpaceModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                  <Users size={16} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-gray-900">Oilaviy & Jamoaviy Byudjet</h3>
+                  <p className="text-[10px] text-gray-400">Umumiy xarajatlarni birgalikda boshqaring</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSpaceModalOpen(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Tab tanlash */}
+            <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-semibold">
+              <button
+                onClick={() => setSpaceModalTab("list")}
+                className={`flex-1 py-1.5 rounded-lg transition ${
+                  spaceModalTab === "list" ? "bg-white text-gray-900 shadow-xs" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Guruhlarim
+              </button>
+              <button
+                onClick={() => setSpaceModalTab("create")}
+                className={`flex-1 py-1.5 rounded-lg transition ${
+                  spaceModalTab === "create" ? "bg-white text-blue-600 shadow-xs" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                + Yangi guruh
+              </button>
+              <button
+                onClick={() => setSpaceModalTab("join")}
+                className={`flex-1 py-1.5 rounded-lg transition ${
+                  spaceModalTab === "join" ? "bg-white text-emerald-600 shadow-xs" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Kodni kiritish
+              </button>
+            </div>
+
+            {/* TAB 1: Guruhlar ro'yxati */}
+            {spaceModalTab === "list" && (
+              <div className="flex flex-col gap-2.5">
+                {/* Shaxsiy byudjet tanlovi */}
+                <div
+                  onClick={() => {
+                    handleSelectSpace("personal");
+                    setIsSpaceModalOpen(false);
+                  }}
+                  className={`p-3 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
+                    selectedSpaceId === "personal"
+                      ? "bg-blue-50/70 border-blue-300 ring-2 ring-blue-500/20"
+                      : "bg-white border-gray-100 hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-gray-100 flex items-center justify-center text-gray-700 font-bold text-xs">
+                      👤
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-900">Shaxsiy Byudjet</h4>
+                      <p className="text-[10px] text-gray-400">Faqat sizning o'zingizga tegishli amallar</p>
+                    </div>
+                  </div>
+                  {selectedSpaceId === "personal" && <UserCheck size={18} className="text-blue-600" />}
+                </div>
+
+                {spaces.length === 0 ? (
+                  <div className="text-center py-6 text-gray-400">
+                    <p className="text-xs font-medium">Sizda hali oilaviy guruhlar yo'q</p>
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      Yangi guruh oching yoki turmush o'rtog'ingiz bergan kodni kiriting.
+                    </p>
+                  </div>
+                ) : (
+                  spaces.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`p-3.5 rounded-2xl border transition flex flex-col gap-2 ${
+                        selectedSpaceId === s.id
+                          ? "bg-blue-50/70 border-blue-300 ring-2 ring-blue-500/20"
+                          : "bg-white border-gray-100 hover:bg-gray-50"
+                      }`}
+                    >
+                      <div
+                        className="flex items-center justify-between cursor-pointer"
+                        onClick={() => {
+                          handleSelectSpace(s.id);
+                          setIsSpaceModalOpen(false);
+                        }}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-violet-100 flex items-center justify-center text-violet-700 font-bold text-xs">
+                            👨‍👩‍👧
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <h4 className="text-xs font-bold text-gray-900">{s.name}</h4>
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 bg-violet-50 text-violet-600 border border-violet-200 rounded-md">
+                                {s.my_role === "OWNER" ? "Egasiz" : "A'zo"}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              {s.members_count} nafar a'zo
+                            </p>
+                          </div>
+                        </div>
+                        {selectedSpaceId === s.id && <UserCheck size={18} className="text-blue-600" />}
+                      </div>
+
+                      {/* Taklif kodi va A'zolar ro'yxati */}
+                      <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-lg border border-gray-200">
+                          <span className="text-gray-400 text-[10px]">Kod:</span>
+                          <span className="font-mono font-bold text-gray-800">{s.invite_code}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(s.invite_code);
+                              setCopiedCode(true);
+                              setTimeout(() => setCopiedCode(false), 2000);
+                            }}
+                            className="text-gray-400 hover:text-gray-600"
+                            title="Nusxalash"
+                          >
+                            {copiedCode ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleLeaveSpace(s.id);
+                          }}
+                          className="text-rose-500 hover:text-rose-700 font-medium text-[10px] flex items-center gap-1"
+                        >
+                          <LogOut size={11} /> Chiqish
+                        </button>
+                      </div>
+
+                      {/* A'zolar ro'yxati chiplari */}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {s.members.map((m) => (
+                          <span
+                            key={m.telegram_id}
+                            className="text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md font-medium"
+                          >
+                            {m.name} {m.is_me ? "(siz)" : ""}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: Yangi oilaviy guruh yaratish */}
+            {spaceModalTab === "create" && (
+              <form onSubmit={handleCreateSpace} className="flex flex-col gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Guruh nomi
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Masalan: Oilamiz byudjeti, Biznes sheriklar"
+                    value={newSpaceName}
+                    onChange={(e) => setNewSpaceName(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 font-medium"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Guruh yaratilgandan so'ng, uning maxsus taklif kodi chiqadi va siz uni oila a'zolaringizga berishingiz mumkin.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submittingSpace}
+                  className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+                >
+                  {submittingSpace ? "Yaratilmoqda..." : "Guruh yaratish"}
+                </button>
+              </form>
+            )}
+
+            {/* TAB 3: Taklif kodi orqali qo'shilish */}
+            {spaceModalTab === "join" && (
+              <form onSubmit={handleJoinSpace} className="flex flex-col gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-gray-600 block mb-1">
+                    Taklif kodi (Invite Code)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Masalan: FAM-9A8B"
+                    value={joinInviteCode}
+                    onChange={(e) => setJoinInviteCode(e.target.value.toUpperCase())}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-emerald-500 font-mono tracking-wider font-bold uppercase"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Oila a'zongiz Telegram'dagi /family buyrug'i yoki ushbu bo'lim orqali olgan kodini kiriting.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submittingSpace}
+                  className="mt-2 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-xl text-xs shadow-xs active:scale-98 transition disabled:opacity-50"
+                >
+                  {submittingSpace ? "Qo'shilmoqda..." : "Guruhga a'zo bo'lish"}
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}

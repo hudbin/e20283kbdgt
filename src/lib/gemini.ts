@@ -197,14 +197,27 @@ ${categoriesContext}
 
 ${accountsContext}
 
-Vazifang xabarni 5 turdan biriga ajratish:
+Vazifang xabarni quyidagi turlardan biriga ajratish:
 1. REPORT: Foydalanuvchi hisobotni fayl (PDF/Excel) sifatida so'ragan bo'lsa (masalan: "O'tgan oy hisobotini ber pdf va excel fayllarni", "bu oylik hisobotni excelda tashla", "menga hisobot faylini yubor", "pdf hisobot ber").
    Bunda:
    action: "REPORT"
    report_period: "month" | "last_month" | "year" | "all"
    report_formats: ("pdf" | "excel") ro'yxati (masalan: ["pdf", "excel"] yoki faqat ["pdf"])
 
-2. DEBT: Qarz berish, qarz olish, bank krediti, mikroqarz olish, qarzni qaytarish yoki kredit to'lash bilan bog'liq amallar.
+2. TRANSFER: Hisoblararo pul o'tkazish, kartadan naqd pul yechish (bankomat) yoki naqd pulni kartaga kiritish.
+   Misollar:
+   - "Uzcarddan naqdga 200 ming yechdim" -> action: "TRANSFER", amount: 200000, from_account_name: "Uzcard", to_account_name: "Naqd"
+   - "Humodan Anorbankka 500 ming o'tkazdim" -> action: "TRANSFER", amount: 500000, from_account_name: "Humo", to_account_name: "Anorbank"
+   - "Bankomatdan kartamdan 100 ming naqd pul yechdim" -> action: "TRANSFER", amount: 100000, from_account_name: "Karta", to_account_name: "Naqd"
+   - "Naqd puldan kartamga 300 ming tashladim" -> action: "TRANSFER", amount: 300000, from_account_name: "Naqd", to_account_name: "Karta"
+   Bunda:
+   action: "TRANSFER"
+   amount: son
+   from_account_name: qaysi hisob/kartadan pul chiqdi
+   to_account_name: qaysi hisob/kartaga pul kirdi
+   description: qisqa izoh
+
+3. DEBT: Qarz berish, qarz olish, bank krediti, mikroqarz olish, qarzni qaytarish yoki kredit to'lash bilan bog'liq amallar.
    Misollar:
    - "Aliga 200 ming qarz berdim" -> action: "DEBT", debt_action: "LEND", person_name: "Ali", amount: 200000
    - "Vali akadan 500 ming qarz oldim" -> action: "DEBT", debt_action: "BORROW", person_name: "Vali aka", amount: 500000
@@ -221,29 +234,48 @@ Vazifang xabarni 5 turdan biriga ajratish:
    due_date: string | null (agar qaytarish sanasi ko'rsatilgan bo'lsa)
    description: qisqa izoh
 
-3. TRANSACTION: Oddiy xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "Anorbankdan 15000 taksiga ketdi", "oylik tushdi 3 mln").
+4. TRANSACTION: Oddiy xarajat yoki daromad kiritish bo'lsa (masalan: "2 ta flesh oldim 30 ming", "Anorbankdan 15000 taksiga ketdi", "oylik tushdi 3 mln", "50$ ga ko'ylak oldim").
+   SHUNINGDEK BANK SMS XABARLARI (Payme, Click, Uzum, Banklar):
+   Foydalanuvchi bank yoki to'lov tizimidan kelgan SMS'ni yuborganida:
+   - Masalan: "Oplata: KORZINKA. Summa: 145 000 UZS. Karta: *1234" -> type: "EXPENSE", amount: 145000, category: "Oziq-ovqat", description: "KORZINKA (SMS)"
+   - "Spisanie 45 000.00 UZS; Karta *8899; YANDEX GO" -> type: "EXPENSE", amount: 45000, category: "Transport", description: "YANDEX GO (SMS)"
+   - "Zachislenie 3 000 000 UZS; Karta *1122; Otpravitel: OOO IT" -> type: "INCOME", amount: 3000000, category: "Daromad", description: "Kirim (SMS)"
+   - "Perevod na kartu *4321: 100 000 UZS" -> type: "EXPENSE", amount: 100000, category: "O'tkazma", description: "Kartaga o'tkazma"
+   Bunda:
    action: "TRANSACTION"
    type: "EXPENSE" yoki "INCOME"
    amount: son
+   currency: "UZS" | "USD" | "EUR" | "RUB" (agar $ / dollar / usd bo'lsa "USD", evro bo'lsa "EUR", rubl bo'lsa "RUB", aks holda "UZS")
    category: Kategoriya nomi (mavjud ro'yxatdan eng mosi yoki yangi taklif)
    is_new_category: boolean (mavjud bo'lsa false, yangi taklif bo'lsa true)
-   account_name: Foydalanuvchi aytgan hisob/karta nomi yoki null
+   account_name: Foydalanuvchi aytgan yoki SMS dagi karta/hisob nomi yoki null
    description: qisqa izoh
 
-4. QUERY: O'z budjeti, kreditlari, kredit kartalari yoki qarzlari haqida savol/tahlil so'ragan bo'lsa (masalan: "Bu oy qancha kredit to'lashim kerak?", "Kredit kartamda qancha foizsiz davr qoldi?", "Oxirgi oyda oziq-ovqatga qancha sarfladim?", "Menda qancha balans qoldi?").
+5. GOAL: Moliyaviy jamg'arma maqsadiga (kopilka) pul qo'shish yoki yechish (masalan: "Umra maqsadimga 500 ming qo'shdim", "Mashina uchun 100$ jamg'ardim", "Kopilkaga 200 ming soldim").
+   Bunda:
+   action: "GOAL"
+   goal_name: Maqsad nomi (masalan "Umra", "Mashina", "Kopilka")
+   amount: son
+   currency: "UZS" | "USD" | "EUR" | "RUB"
+
+6. QUERY: O'z budjeti, kreditlari, kredit kartalari yoki qarzlari haqida savol/tahlil so'ragan bo'lsa (masalan: "Bu oy qancha kredit to'lashim kerak?", "Kredit kartamda qancha foizsiz davr qoldi?", "Oxirgi oyda oziq-ovqatga qancha sarfladim?", "Menda qancha balans qoldi?").
    action: "QUERY"
 
-5. OTHER: Boshqa har qanday suhbat yoki noaniq gap.
+7. OTHER: Boshqa har qanday suhbat yoki noaniq gap.
    action: "OTHER"
 
 Sening javobing FAQAT quyidagi JSON formatida bo'lsin:
 {
-  "action": "TRANSACTION" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "TRANSFER" | "DEBT" | "GOAL" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
+  "currency": "UZS" | "USD" | "EUR" | "RUB",
   "category": string | null,
   "is_new_category": boolean | null,
   "account_name": string | null,
+  "from_account_name": string | null,
+  "to_account_name": string | null,
+  "goal_name": string | null,
   "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
   "person_name": string | null,
   "due_date": string | null,
@@ -273,20 +305,24 @@ Audioni diqqat bilan tingla va quyidagi JSON formatida natija ber:
 ${categoriesContext}
 ${accountsContext}
 
-1. Agar yangi oddiy kirim yoki chiqim bo'lsa -> action: "TRANSACTION", type: "EXPENSE"|"INCOME", amount, category, account_name
-2. Agar qarz berish, qarz olish, kredit olish yoki qarzni to'lash bo'lsa -> action: "DEBT", debt_action: "LEND"|"BORROW"|"LOAN"|"REPAY"|"RECEIVE", person_name, amount, due_date
-3. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
-4. Agar savol yoki tahlil so'rayotgan bo'lsa (masalan "Kreditlarim qancha qoldi?") -> action: "QUERY"
-5. Noma'lum bo'lsa -> action: "OTHER"
+1. Agar hisoblararo o'tkazma yoki naqd yechish/to'ldirish bo'lsa -> action: "TRANSFER", amount, from_account_name, to_account_name, description
+2. Agar yangi oddiy kirim yoki chiqim bo'lsa -> action: "TRANSACTION", type: "EXPENSE"|"INCOME", amount, category, account_name, description
+3. Agar qarz berish, qarz olish, kredit olish yoki qarzni to'lash bo'lsa -> action: "DEBT", debt_action: "LEND"|"BORROW"|"LOAN"|"REPAY"|"RECEIVE", person_name, amount, due_date
+4. Agar hisobot faylini (PDF yoki Excel) so'rayotgan bo'lsa -> action: "REPORT", report_period: "month"|"last_month"|"year"|"all", report_formats: ["pdf", "excel"]
+5. Agar savol yoki tahlil so'rayotgan bo'lsa (masalan "Kreditlarim qancha qoldi?") -> action: "QUERY"
+6. Noma'lum bo'lsa -> action: "OTHER"
 
 Javobni FAQAT to'g'ri JSON formatida qaytar:
 {
-  "action": "TRANSACTION" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
+  "action": "TRANSACTION" | "TRANSFER" | "DEBT" | "REPORT" | "QUERY" | "OTHER",
   "type": "EXPENSE" | "INCOME" | null,
   "amount": number | null,
+  "currency": "UZS" | "USD" | "EUR" | "RUB",
   "category": string | null,
   "is_new_category": boolean | null,
   "account_name": string | null,
+  "from_account_name": string | null,
+  "to_account_name": string | null,
   "debt_action": "LEND" | "BORROW" | "LOAN" | "REPAY" | "RECEIVE" | null,
   "person_name": string | null,
   "due_date": string | null,

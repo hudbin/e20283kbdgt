@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { getAuthenticatedTelegramUser } from '@/lib/auth'
 
 export async function GET(req: Request) {
   try {
+    const auth = getAuthenticatedTelegramUser(req)
     const { searchParams } = new URL(req.url)
-    const telegramId = searchParams.get('telegram_id')
+    const telegramId = auth ? auth.telegramId : Number(searchParams.get('telegram_id'))
 
     if (!telegramId) {
       return NextResponse.json({ error: 'telegram_id is required' }, { status: 400 })
@@ -67,6 +69,7 @@ export async function POST(req: Request) {
       telegram_id,
       name,
       type = 'DEBIT_CARD',
+      currency = 'UZS',
       balance = 0,
       credit_limit = 0,
       grace_due_day = null,
@@ -92,6 +95,7 @@ export async function POST(req: Request) {
         telegram_id: Number(telegram_id),
         name: name.trim(),
         type,
+        currency: (currency || 'UZS').toUpperCase(),
         balance: Number(balance) || 0,
         credit_limit: Number(credit_limit) || 0,
         grace_due_day: grace_due_day ? Number(grace_due_day) : null,
