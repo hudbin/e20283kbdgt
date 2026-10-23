@@ -345,6 +345,68 @@ Javobni FAQAT to'g'ri JSON formatida qaytar:
 }
 
 /**
+ * Chek / Kvitansiya rasmi (Image) yoki PDF kvitansiyasini tahlil qilish
+ */
+export async function analyzeMediaReceipt(
+  mediaBase64: string,
+  mimeType: string,
+  userCaption: string = '',
+  existingCategories: Array<{ name: string; type: string }> = [],
+  existingAccounts: Array<{ id: string; name: string; type: string; is_default: boolean; balance?: number }> = []
+) {
+  const categoriesContext = formatCategoriesPrompt(existingCategories)
+  const accountsContext = formatAccountsPrompt(existingAccounts)
+
+  const prompt = `
+Foydalanuvchi to'lov cheki, kvitansiya, bank o'tkazmasi skrinshoti yoki PDF kvitansiyasini yubordi.
+Foydalanuvchi izohi (agar bo'lsa): "${userCaption}"
+
+Ushbu rasm yoki PDF hujjatni diqqat bilan o'rgan (OCR va tahlil qil):
+- Kvitansiyada qanday xizmat, tovar yoki kimga pul o'tkazilgan (Kompaniya, do'kon, odam ismi)?
+- Summa qancha (UZS, USD va h.k.)?
+- Agar bu karta orqali to'lov yoki o'tkazma bo'lsa, qaysi hisobdan ketgan (masalan, Uzcard, Humo, Visa yoki bank)?
+- Agar bu kommunal, oziq-ovqat, restoran, transport, kiyim yoki boshqa xarajat bo'lsa mos kategoriyani tanla.
+- Agar bu hisoblararo o'tkazma (masalan o'zining boshqa kartasiga o'tkazish) bo'lsa -> action: "TRANSFER"
+- Agar odatiy do'kon/xizmat to'lovi yoki pul o'tkazmasi bo'lsa -> action: "TRANSACTION", type: "EXPENSE"
+
+${categoriesContext}
+${accountsContext}
+
+QOIDALAR:
+1. Chiqim bo'lsa (to'lov cheki, pul yuborish, xarid): type: "EXPENSE".
+2. Kirim bo'lsa (kartaga pul tushgani haqidagi kvitansiya): type: "INCOME".
+3. Summani aniq raqam sifatida ol (masalan 45000).
+4. description maydonida qisqa va tushunarli qilib yoz (masalan: "Korzinkada xarid", "Anvarbekka o'tkazma", "Beeline to'lovi").
+
+Javobni FAQAT to'g'ri JSON formatida qaytar:
+{
+  "action": "TRANSACTION" | "TRANSFER" | "OTHER",
+  "type": "EXPENSE" | "INCOME" | null,
+  "amount": number | null,
+  "currency": "UZS" | "USD" | "EUR" | "RUB",
+  "category": string | null,
+  "is_new_category": boolean | null,
+  "account_name": string | null,
+  "from_account_name": string | null,
+  "to_account_name": string | null,
+  "description": string | null
+}
+`
+
+  const parts = [
+    prompt,
+    {
+      inlineData: {
+        data: mediaBase64,
+        mimeType: mimeType
+      }
+    }
+  ]
+
+  return generateWithSafety(parts, true)
+}
+
+/**
  * Foydalanuvchining savoliga bazadagi ma'lumotlar asosida aqlli javob qaytarish
  */
 export async function answerFinancialQuery(

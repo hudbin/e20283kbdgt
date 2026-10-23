@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { analyzeTextMessage, analyzeAudioMessage, answerFinancialQuery } from '@/lib/gemini'
+import { analyzeTextMessage, analyzeAudioMessage, analyzeMediaReceipt, answerFinancialQuery } from '@/lib/gemini'
 import { generatePdfBuffer, generateExcelBuffer } from '@/lib/reports/generator'
 import { getExchangeRates, convertToUZS, formatCurrency } from '@/lib/currency'
 
@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     const body = await req.json()
 
     if (body.message) {
-      const { chat, text, from, voice } = body.message
+      const { chat, text, from, voice, photo, document, caption } = body.message
 
       await supabase.from('users').upsert({
         telegram_id: from.id,
@@ -65,7 +65,7 @@ export async function POST(req: Request) {
         await sendMessage(
           chat.id, 
           `Salom, ${from.first_name}! 👋\nMen sizning shaxsiy budjet yordamchiningizman.\n\n` +
-          `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i> yoki ovozli xabar qoldiring.\n` +
+          `🔹 <b>Xarajat/Kirim kiritish:</b> <i>"2 ta flesh 30 ming"</i>, ovozli xabar yoki <b>to'lov cheki/kvitansiya rasmi (PDF)</b> yuboring.\n` +
           `🔹 <b>Hisobot fayllarini so'rash:</b> <i>"O'tgan oy hisobotini ber pdf va excel fayllarda"</i> deb yozing yoki ayting.\n` +
           `🔹 <b>Tahliliy savollar:</b> <i>"Ichimliklar uchun qancha sarfladim?"</i>, <i>"Menda qancha balans qoldi?"</i> deb so'rang.\n` +
           `🔹 <b>Oilaviy byudjet:</b> <i>/family</i> deb yozing.\n` +
@@ -158,7 +158,7 @@ export async function POST(req: Request) {
       }
 
       let parsedData: any = null
-      let originalPromptText = text || ""
+      let originalPromptText = text || caption || ""
 
       // Bazadan foydalanuvchining mavjud kategoriyalarini olamiz
       let existingCategories: Array<{ name: string; type: string }> = []
@@ -222,6 +222,68 @@ export async function POST(req: Request) {
         } catch (e: any) {
           console.error("AI Voice Error:", e)
           await sendMessage(chat.id, "Ovozli xabarni tahlil qilishda xatolik yuz berdi.")
+          return NextResponse.json({ ok: true })
+        }
+      } else if (photo && Array.isArray(photo) && photo.length > 0) {
+        // Rasm (Photo) / Kvitansiya skrinshoti kelgan holat
+        await sendTypingAction(chat.id, 'typing')
+        try {
+          // Eng yuqori sifatli rasmni olamiz (oxirgi element)
+          const largestPhoto = photo[photo.length - 1]
+          const fileRes = await fetch(`${TELEGRAM_API_URL}/getFile?file_id=${largestPhoto.file_id}`)
+          const fileData = await fileRes.json()
+
+          if (fileData.ok && fileData.result?.file_path) {
+            const fileDownloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
+            const imgRes = await fetch(fileDownloadUrl)
+            const imgBuffer = await imgRes.arrayBuffer()
+            const imgBase64 = Buffer.from(imgBuffer).toString('base64')
+
+            const responseText = await analyzeMediaReceipt(imgBase64, 'image/jpeg', caption || '', existingCategories, existingAccounts)
+            parsedData = JSON.parse(responseText)
+            originalPromptText = parsedData?.description || caption || "Kvitansiya rasmi"
+          } else {
+            await sendMessage(chat.id, "Rasmni yuklab olishda muammo yuz berdi.")
+            return NextResponse.json({ ok: true })
+          }
+        } catch (e: any) {
+          console.error("AI Photo Error:", e)
+          await sendMessage(chat.id, "To'lov chekini tahlil qilishda xatolik yuz berdi.")
+          return NextResponse.json({ ok: true })
+        }
+      } else if (document) {
+        // PDF yoki boshqa hujjat kelgan holat
+        await sendTypingAction(chat.id, 'typing')
+        try {
+          const mime = document.mime_type || ''
+          const isPdf = mime.includes('pdf') || (document.file_name && document.file_name.toLowerCase().endsWith('.pdf'))
+          const isImageDoc = mime.startsWith('image/')
+
+          if (isPdf || isImageDoc) {
+            const fileRes = await fetch(`${TELEGRAM_API_URL}/getFile?file_id=${document.file_id}`)
+            const fileData = await fileRes.json()
+
+            if (fileData.ok && fileData.result?.file_path) {
+              const fileDownloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
+              const docRes = await fetch(fileDownloadUrl)
+              const docBuffer = await docRes.arrayBuffer()
+              const docBase64 = Buffer.from(docBuffer).toString('base64')
+              const finalMime = isPdf ? 'application/pdf' : mime
+
+              const responseText = await analyzeMediaReceipt(docBase64, finalMime, caption || '', existingCategories, existingAccounts)
+              parsedData = JSON.parse(responseText)
+              originalPromptText = parsedData?.description || caption || (isPdf ? "PDF kvitansiya" : "Kvitansiya hujjati")
+            } else {
+              await sendMessage(chat.id, "Faylni yuklab olishda muammo yuz berdi.")
+              return NextResponse.json({ ok: true })
+            }
+          } else {
+            await sendMessage(chat.id, "Iltimos, kvitansiyani rasm (JPEG/PNG) yoki PDF shaklida yuboring.")
+            return NextResponse.json({ ok: true })
+          }
+        } catch (e: any) {
+          console.error("AI Document Error:", e)
+          await sendMessage(chat.id, "Kvitansiya faylini tahlil qilishda xatolik yuz berdi.")
           return NextResponse.json({ ok: true })
         }
       }
