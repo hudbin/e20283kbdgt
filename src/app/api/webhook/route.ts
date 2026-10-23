@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { analyzeTextMessage, analyzeAudioMessage, analyzeMediaReceipt, answerFinancialQuery } from '@/lib/gemini'
+import { extractText } from 'unpdf'
 import { generatePdfBuffer, generateExcelBuffer } from '@/lib/reports/generator'
 import { getExchangeRates, convertToUZS, formatCurrency } from '@/lib/currency'
 
@@ -267,18 +268,42 @@ export async function POST(req: Request) {
               const fileDownloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`
               const docRes = await fetch(fileDownloadUrl)
               const docBuffer = await docRes.arrayBuffer()
-              const docBase64 = Buffer.from(docBuffer).toString('base64')
-              const finalMime = isPdf ? 'application/pdf' : mime
+              const nodeBuffer = Buffer.from(docBuffer)
 
-              const responseText = await analyzeMediaReceipt(docBase64, finalMime, caption || '', existingCategories, existingAccounts)
-              parsedData = JSON.parse(responseText)
-              originalPromptText = parsedData?.description || caption || (isPdf ? "PDF kvitansiya" : "Kvitansiya hujjati")
+              if (isPdf) {
+                // PDF matnini ajratib olamiz (Payme, Click, Bank cheklarining matni to'g'ridan-to'g'ri olinadi)
+                let extractedText = ''
+                try {
+                  const pdfRes = await extractText(new Uint8Array(nodeBuffer))
+                  extractedText = Array.isArray(pdfRes.text) ? pdfRes.text.join('\n') : (pdfRes.text || '')
+                  extractedText = extractedText.trim()
+                } catch (pdfErr) {
+                  console.warn("extractText failed, fallbacking:", pdfErr)
+                }
+
+                if (extractedText && extractedText.length > 10) {
+                  const combinedText = `To'lov kvitansiyasi PDF hujjati:\n${extractedText}\n${caption ? `Izoh: ${caption}` : ''}`
+                  const responseText = await analyzeTextMessage(combinedText, existingCategories, existingAccounts)
+                  parsedData = JSON.parse(responseText)
+                  originalPromptText = parsedData?.description || caption || "PDF kvitansiya"
+                } else {
+                  // Matnsiz (skanerlangan rasm ko'rinishidagi) PDF bo'lsa
+                  await sendMessage(chat.id, "Ushbu PDF fayldan matn ajratib bo'lmadi. Iltimos, chekning skrinshotini (rasm qilib) yuboring.")
+                  return NextResponse.json({ ok: true })
+                }
+              } else {
+                // Hujjat sifatida yuborilgan rasm
+                const docBase64 = nodeBuffer.toString('base64')
+                const responseText = await analyzeMediaReceipt(docBase64, mime || 'image/jpeg', caption || '', existingCategories, existingAccounts)
+                parsedData = JSON.parse(responseText)
+                originalPromptText = parsedData?.description || caption || "Kvitansiya hujjati"
+              }
             } else {
               await sendMessage(chat.id, "Faylni yuklab olishda muammo yuz berdi.")
               return NextResponse.json({ ok: true })
             }
           } else {
-            await sendMessage(chat.id, "Iltimos, kvitansiyani rasm (JPEG/PNG) yoki PDF shaklida yuboring.")
+            await sendMessage(chat.id, "Iltimos, to'lov kvitansiyasini rasm (JPEG/PNG) yoki PDF shaklida yuboring.")
             return NextResponse.json({ ok: true })
           }
         } catch (e: any) {
@@ -568,8 +593,8 @@ export async function POST(req: Request) {
             ]
           ]
         })
-      } else if (text || voice) {
-        await sendMessage(chat.id, "Kechirasiz, xabaringizni to'liq tushunmadim. Xarajat kiritish uchun: <i>\"30 mingga go'sht oldim\"</i>, qarz uchun: <i>\"Aliga 200 ming qarz berdim\"</i> deb yozing.")
+      } else if (text || voice || photo || document) {
+        await sendMessage(chat.id, "Kechirasiz, xabaringiz yoki fayldagi ma'lumotlarni to'liq tushunmadim. Iltimos, chek ravshan ekanligiga ishonch hosil qiling yoki: <i>\"30 mingga go'sht oldim\"</i> deb yozing.")
       }
 
     } else if (body.callback_query) {
