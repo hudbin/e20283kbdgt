@@ -47,6 +47,8 @@ async function sendTypingAction(chatId: number, action: 'typing' | 'upload_docum
   } catch (_) {}
 }
 
+export const maxDuration = 60 // Vercel funksiyasi uchun maksimal 60 soniya vaqt berish
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -228,6 +230,7 @@ export async function POST(req: Request) {
       } else if (photo && Array.isArray(photo) && photo.length > 0) {
         // Rasm (Photo) / Kvitansiya skrinshoti kelgan holat
         await sendTypingAction(chat.id, 'typing')
+        await sendMessage(chat.id, "🔍 To'lov cheki qabul qilindi, tahlil qilinmoqda...")
         try {
           // Eng yuqori sifatli rasmni olamiz (oxirgi element)
           const largestPhoto = photo[photo.length - 1]
@@ -244,17 +247,18 @@ export async function POST(req: Request) {
             parsedData = JSON.parse(responseText)
             originalPromptText = parsedData?.description || caption || "Kvitansiya rasmi"
           } else {
-            await sendMessage(chat.id, "Rasmni yuklab olishda muammo yuz berdi.")
+            await sendMessage(chat.id, "Rasmni Telegram'dan yuklab olishda muammo yuz berdi. Iltimos qayta yuboring.")
             return NextResponse.json({ ok: true })
           }
         } catch (e: any) {
           console.error("AI Photo Error:", e)
-          await sendMessage(chat.id, "To'lov chekini tahlil qilishda xatolik yuz berdi.")
+          await sendMessage(chat.id, `To'lov chekini tahlil qilishda xatolik yuz berdi: ${e?.message || 'Noma\'lum xatolik'}`)
           return NextResponse.json({ ok: true })
         }
       } else if (document) {
         // PDF yoki boshqa hujjat kelgan holat
         await sendTypingAction(chat.id, 'typing')
+        await sendMessage(chat.id, "📄 Kvitansiya hujjati qabul qilindi, tahlil qilinmoqda...")
         try {
           const mime = document.mime_type || ''
           const isPdf = mime.includes('pdf') || (document.file_name && document.file_name.toLowerCase().endsWith('.pdf'))
@@ -299,7 +303,7 @@ export async function POST(req: Request) {
                 originalPromptText = parsedData?.description || caption || "Kvitansiya hujjati"
               }
             } else {
-              await sendMessage(chat.id, "Faylni yuklab olishda muammo yuz berdi.")
+              await sendMessage(chat.id, "Faylni Telegram'dan yuklab olishda muammo yuz berdi.")
               return NextResponse.json({ ok: true })
             }
           } else {
@@ -308,7 +312,7 @@ export async function POST(req: Request) {
           }
         } catch (e: any) {
           console.error("AI Document Error:", e)
-          await sendMessage(chat.id, "Kvitansiya faylini tahlil qilishda xatolik yuz berdi.")
+          await sendMessage(chat.id, `Kvitansiya faylini tahlil qilishda xatolik yuz berdi: ${e?.message || 'Noma\'lum xatolik'}`)
           return NextResponse.json({ ok: true })
         }
       }
